@@ -1,13 +1,12 @@
-# PayTrace SCA Service Template
+# PayTrace Payment Processor
 
 ## Introduction
 
-This template is a FastAPI-based starter for building the PayTrace SCA service. It includes:
+This is a starter for building the PayTrace Payment Processor. It includes:
 
-- Service bootstrap with FastAPI lifecycle hooks
+- Service bootstrap with lifecycle hooks
 - Centralized configuration loading from environment variables and `.env`
 - PostgreSQL connection initialization through SQLAlchemy
-- Base health/probe routes
 - Test scaffolding with `pytest`
 
 ## Project Structure
@@ -15,12 +14,10 @@ This template is a FastAPI-based starter for building the PayTrace SCA service. 
 ```text
 src/
   main.py                 # Service entrypoint and startup lifecycle
-  routes/Routes.py        # API route registration and default endpoints
   utilities/ConfigLoader.py
   utilities/DBHelper.py
   utilities/Logging.py
 tests/
-  test_routes.py
   test_config_loader.py
 ```
 
@@ -56,7 +53,7 @@ If you want to install as an editable package instead:
 uv pip install -e .
 ```
 
-### 3. Run the service
+### 3. Run the processor
 
 ```bash
 uv run python src/main.py
@@ -78,12 +75,7 @@ Use the following command pattern to run the service with required environment v
 
 ```bash
 docker run -d \
-  --name paytrace-unittest-cimage01 \
-  -p 8081:8081 \
-  -e OFTL_SCA_CONTEXT_ROOT="/sca" \
-  -e OFTL_SCA_VERSION="1" \
-  -e OFTL_SCA_HOST="0.0.0.0" \
-  -e OFTL_SCA_PORT="8081" \
+  --name paytrace-payment-processor \
   -e OFTL_LOG_LEVEL="INFO" \
   -e OFTL_LOG_FORMAT="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s" \
   -e OFTL_POSTGRESDB_USERNAME="admin" \
@@ -98,8 +90,7 @@ Or use a `.env` file with `--env-file`:
 
 ```bash
 docker run -d \
-  --name paytrace-unittest-cimage01 \
-  -p 8081:8081 \
+  --name paytrace-payment-processor \
   --env-file .env \
   pytrace-unittest-cimage:latest
 ```
