@@ -7,6 +7,7 @@ This is a starter for building the PayTrace Payment Processor. It includes:
 - Service bootstrap with lifecycle hooks
 - Centralized configuration loading from environment variables and `.env`
 - PostgreSQL connection initialization through SQLAlchemy
+- RabbitMQ listener startup for domestic and cross-border payment request queues
 - Test scaffolding with `pytest`
 
 ## Project Structure
@@ -17,8 +18,10 @@ src/
   utilities/ConfigLoader.py
   utilities/DBHelper.py
   utilities/Logging.py
+  utilities/RabbitMQHelper.py
 tests/
   test_config_loader.py
+  test_rabbitmq_helper.py
 ```
 
 ## Prerequisites
@@ -26,6 +29,7 @@ tests/
 - Python 3.11+ (recommended)
 - `uv` installed
 - PostgreSQL available for runtime startup checks
+- RabbitMQ available for runtime queue listener startup
 
 ## Quick Start
 
@@ -143,6 +147,26 @@ Example with defaults in `.env.example`:
 Optional:
 
 - `OFTL_POSTGRESDB_POOLSIZE`: SQLAlchemy pool size (default: `10`)
+
+### RabbitMQ (Required for queue listener startup)
+
+- `OFTL_RABITMQ_HOST`
+- `OFTL_RABITMQ_PORT`
+- `OFTL_RABITMQ_USERNAME`
+- `OFTL_RABITMQ_PASSWORD_SECRET`
+- `OFTL_RABITMQ_VHOST`
+- `OFTL_RABITMQ_HEARTBEAT`
+- `OFTL_RABITMQ_BLOCKED_CONNECTION_TIMEOUT`
+- `OFTL_RABITMQ_CONNECTION_ATTEMPTS`
+- `OFTL_RABITMQ_CONN_RETRYCOUNT`: total number of application-level connection retries before exiting with code `99`
+- `OFTL_RABITMQ_RETRY_DELAY`
+- `OFTL_RABITMQ_SOCKET_TIMEOUT`
+- `OFTL_RABITMQ_QUEUE_DURABLE`
+- `OFTL_RABITMQ_PREFETCH_COUNT`
+- `OFTL_RABITMQ_DOEMSTIC_REQUEST_QUEUE`: defaults to `CSV.PAYMENTS.DOMESTIC.REQ`
+- `OFTL_RABITMQ_CROSS_BORDER_REQUEST_QUEUE`: defaults to `CSV.PAYMENTS.CROSS_BORDER.REQ`
+
+When the service starts, it creates a persistent RabbitMQ listener and begins consuming from both configured request queues. If RabbitMQ cannot be reached after the configured `OFTL_RABITMQ_CONN_RETRYCOUNT` attempts, the processor exits with status code `99`.
 
 ## Default Routes
 
