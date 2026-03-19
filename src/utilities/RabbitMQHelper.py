@@ -212,7 +212,11 @@ class RabbitMQHelper:
                 correlation_id or "N/A",
                 payload,
             )
+            # TODO: Implement actual payment processing logic here
+            
+            # END;
             if not cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_AUTOACK", "true"), True):
+                Logging.info("Acknowledging RabbitMQ message for queue=%s correlation_id=%s", queue_name, correlation_id or "N/A")
                 channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as exc:
             Logging.error(
@@ -221,6 +225,7 @@ class RabbitMQHelper:
                 exc,
             )
             if not cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_AUTOACK", "true"), True):
+                Logging.info("NACKing RabbitMQ message for queue=%s correlation_id=%s with requeue=True", queue_name, correlation_id or "N/A")
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
             
 

@@ -6,11 +6,14 @@ Description: Service Template / starter code for PayTrace SCA Service.
 Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/14
 """
 
-from utilities.Logging import Logging
-from utilities.ConfigLoader import ConfigLoader
-from utilities.DBHelper import DBHelper
-from utilities.RabbitMQHelper import RabbitMQConnectionError, RabbitMQHelper
 import sys
+import time
+
+from utilities.Logging          import Logging
+from utilities.ConfigLoader     import ConfigLoader
+from utilities.DBHelper         import DBHelper
+from utilities.RabbitMQHelper   import RabbitMQConnectionError, RabbitMQHelper
+
 
 
 def initialize_service():
@@ -28,7 +31,6 @@ def initialize_service():
         raise
 
 # Default variables
-_DEFAULT_LOG_FORMAT = "[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
 _DEFAULT_LOG_LEVEL  = "INFO"
 # END;
 
@@ -57,10 +59,7 @@ if __name__ == "__main__":
     try:
         displayBanner()
         initialize_service()
-        Logging.info("PayTrace Payment Processor started successfully.")
-        # TODO: Add main processing logic here
-        # For now, just keep running or exit
-        import time
+        Logging.info("PayTrace Payment Processor started successfully.")        
         while True:
             time.sleep(60)  # Keep alive, replace with actual logic
     except RabbitMQConnectionError as e:
