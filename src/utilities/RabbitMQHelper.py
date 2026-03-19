@@ -194,7 +194,7 @@ class RabbitMQHelper:
             channel.basic_consume(
                 queue=queue_name,
                 on_message_callback=cls._on_message,
-                auto_ack=False,
+                auto_ack=cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_AUTOACK", "true"), True),
             )
             Logging.info("RabbitMQ listener bound to queue: %s", queue_name)
         return channel
@@ -212,14 +212,17 @@ class RabbitMQHelper:
                 correlation_id or "N/A",
                 payload,
             )
-            channel.basic_ack(delivery_tag=method.delivery_tag)
+            if not cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_AUTOACK", "true"), True):
+                channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as exc:
             Logging.error(
                 "Failed to process RabbitMQ payment request from queue=%s: %s",
                 queue_name,
                 exc,
             )
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            if not cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_AUTOACK", "true"), True):
+                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            
 
     @classmethod
     def _decode_body(cls, body: bytes) -> Any:
