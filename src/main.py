@@ -9,6 +9,7 @@ Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/14
 import sys
 import time
 
+from domain.PaymentRequestHandler import PaymentRequestHandler
 from utilities.Logging          import Logging
 from utilities.ConfigLoader     import ConfigLoader
 from utilities.DBHelper         import DBHelper
@@ -23,7 +24,7 @@ def initialize_service():
             Logging.info("Database connection is not established.")
             Logging.error("Failed to initialize database connection during startup.")
             raise RuntimeError("Database initialization failed. Service startup aborted.")
-        RabbitMQHelper.initialize_connection()
+        RabbitMQHelper.initialize_connection(PaymentRequestHandler.handle_message)
         RabbitMQHelper.start_listener()
     except Exception as ex:
         Logging.info("Service dependencies are not fully established.")
@@ -62,6 +63,11 @@ if __name__ == "__main__":
         Logging.info("PayTrace Payment Processor started successfully.")        
         while True:
             time.sleep(60)  # Keep alive, replace with actual logic
+    except KeyboardInterrupt:
+        Logging.warning("Shutdown requested by user.")
+        DBHelper.dispose_connection()
+        RabbitMQHelper.stop_listener()        
+        sys.exit(0)
     except RabbitMQConnectionError as e:
         Logging.error("Error starting Payment Processor")
         Logging.error(str(e))

@@ -40,7 +40,8 @@ def test_queue_names_use_environment_variables(monkeypatch):
     assert queue_names == ("custom.domestic.queue", "custom.cross.border.queue")
 
 
-def test_on_message_acknowledges_json_payload():
+def test_on_message_acknowledges_json_payload(monkeypatch):
+    monkeypatch.setenv("OFTL_RABITMQ_AUTOACK", "false")
     ack_calls: list[int] = []
     nack_calls: list[tuple[int, bool]] = []
     channel = SimpleNamespace(
@@ -54,6 +55,26 @@ def test_on_message_acknowledges_json_payload():
 
     assert ack_calls == [7]
     assert nack_calls == []
+
+
+def test_on_message_calls_registered_handler_before_ack(monkeypatch):
+    monkeypatch.setenv("OFTL_RABITMQ_AUTOACK", "false")
+    observed: list[tuple[object, object, object, bytes]] = []
+    ack_calls: list[int] = []
+    channel = SimpleNamespace(
+        basic_ack=lambda delivery_tag: ack_calls.append(delivery_tag),
+        basic_nack=lambda delivery_tag, requeue: None,
+    )
+    method = SimpleNamespace(delivery_tag=8, routing_key="CSV.PAYMENTS.DOMESTIC.REQ")
+    properties = SimpleNamespace(correlation_id="def-456")
+
+    RabbitMQHelper._message_handler = lambda ch, met, props, body: observed.append((ch, met, props, body))
+
+    RabbitMQHelper._on_message(channel, method, properties, b'{"payment_id":"456"}')
+
+    assert len(observed) == 1
+    assert observed[0] == (channel, method, properties, b'{"payment_id":"456"}')
+    assert ack_calls == [8]
 
 
 def test_connection_retry_count_uses_default():

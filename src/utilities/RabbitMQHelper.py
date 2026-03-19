@@ -10,7 +10,7 @@ import json
 import os
 import time
 from threading import Event, Lock, Thread
-from typing import Any
+from typing import Any, Callable
 
 from .ConfigLoader import ConfigLoader
 from .Logging import Logging
@@ -33,6 +33,7 @@ class RabbitMQHelper:
     _listener_thread: Thread | None = None
     _stop_event: Event = Event()
     _lock: Lock = Lock()
+    _message_handler: Callable[[Any, Any, Any, bytes], Any] | None = None
 
     @classmethod
     def _require_pika(cls) -> Any:
@@ -127,8 +128,12 @@ class RabbitMQHelper:
         os._exit(99)
 
     @classmethod
-    def initialize_connection(cls) -> None:
+    def initialize_connection(
+        cls,
+        message_handler: Callable[[Any, Any, Any, bytes], Any] | None = None,
+    ) -> None:
         """Validate RabbitMQ client availability and connection configuration."""
+        cls._message_handler = message_handler
         cls._require_pika()
         cls._build_connection_parameters()
         cls._connect_consumer_with_retry()
@@ -212,9 +217,18 @@ class RabbitMQHelper:
                 correlation_id or "N/A",
                 payload,
             )
-            # TODO: Implement actual payment processing logic here
-            
-            # END;
+            if cls._message_handler is not None:
+                Logging.info(
+                    "Calling RabbitMQ message handler for queue=%s correlation_id=%s",
+                    queue_name,
+                    correlation_id or "N/A",
+                )
+                cls._message_handler(channel, method, properties, body)
+                Logging.info(
+                    "Completed RabbitMQ message handler for queue=%s correlation_id=%s",
+                    queue_name,
+                    correlation_id or "N/A",
+                )
             if not cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_AUTOACK", "true"), True):
                 Logging.info("Acknowledging RabbitMQ message for queue=%s correlation_id=%s", queue_name, correlation_id or "N/A")
                 channel.basic_ack(delivery_tag=method.delivery_tag)
