@@ -8,6 +8,7 @@ This is a starter for building the PayTrace Payment Processor. It includes:
 - Centralized configuration loading from environment variables and `.env`
 - PostgreSQL connection initialization through SQLAlchemy
 - RabbitMQ listener startup for domestic and cross-border payment request queues
+- Payment request validation using `src/domain/payment_instruction.schema.json`
 - Test scaffolding with `pytest`
 
 ## Project Structure
@@ -15,6 +16,9 @@ This is a starter for building the PayTrace Payment Processor. It includes:
 ```text
 src/
   main.py                 # Service entrypoint and startup lifecycle
+  domain/PaymentRequestHandler.py
+  domain/Iso20022AdapterPoster.py
+  domain/payment_instruction.schema.json
   utilities/ConfigLoader.py
   utilities/DBHelper.py
   utilities/Logging.py
@@ -167,6 +171,18 @@ Optional:
 - `OFTL_RABITMQ_CROSS_BORDER_REQUEST_QUEUE`: defaults to `CSV.PAYMENTS.CROSS_BORDER.REQ`
 
 When the service starts, it creates a persistent RabbitMQ listener and begins consuming from both configured request queues. If RabbitMQ cannot be reached after the configured `OFTL_RABITMQ_CONN_RETRYCOUNT` attempts, the processor exits with status code `99`.
+
+## Queue Message Format
+
+Inbound RabbitMQ messages must be valid JSON objects that conform to [`payment_instruction.schema.json`](/Users/furqanbaqai/Source/openfintechlab/paytrace/paytrace-payment-processor/src/domain/payment_instruction.schema.json). This JSON is received as the input message body from the queue and is validated by [`PaymentRequestHandler.py`](/Users/furqanbaqai/Source/openfintechlab/paytrace/paytrace-payment-processor/src/domain/PaymentRequestHandler.py).
+
+Example input message received from the queue:
+
+```text
+'{"transfer_id":"PTX-0000001","transfer_type":"DOMESTIC","transaction_datetime":"2026-03-03T10:15:30+00:00","requested_execution_date":"2026-03-04","amount":"2500.00","currency":"AED","purpose_code":"SUPP","charge_bearer":"SHAR","exchange_rate":null,"debtor_name":"Sharjah Trading LLC","debtor_country":"AE","debtor_account_scheme":"IBAN","debtor_account_id":"AE070331234567890123456","debtor_bank_id_scheme":"BIC","debtor_bank_id":"SIBUAEAD","creditor_name":"Desert Supplies FZC","creditor_country":"AE","creditor_account_scheme":"IBAN","creditor_account_id":"AE170540123456789012345","creditor_bank_id_scheme":"LOCAL","creditor_bank_id":"EBILAEAD","intermediary_bank_bic":null,"remittance_unstructured":"Invoice 7843 - office supplies","remittance_reference":"INV-7843"}'
+```
+
+This sample represents a domestic payment request message consumed from `CSV.PAYMENTS.DOMESTIC.REQ`.
 
 ## Default Routes
 

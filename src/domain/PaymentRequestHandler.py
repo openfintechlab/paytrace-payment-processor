@@ -12,9 +12,11 @@ from typing import Any, Mapping
 from jsonschema import Draft202012Validator, FormatChecker
 
 try:
+    from domain.Iso20022AdapterPoster import Iso20022AdapterPoster
     from utilities.DBHelper import DBHelper
     from utilities.Logging import Logging
 except ImportError:  # pragma: no cover - package import fallback
+    from src.domain.Iso20022AdapterPoster import Iso20022AdapterPoster
     from src.utilities.DBHelper import DBHelper
     from src.utilities.Logging import Logging
 
@@ -23,12 +25,17 @@ class PaymentRequestProcessingError(ValueError):
     """Raised when a payment request cannot be parsed or validated."""
 
 
+AdapterProcessingResult = tuple[bool, str, str]
+
+
 class PaymentRequestHandler:
     """Validate inbound payment messages and persist processing status."""
 
     _SCHEMA_PATH = Path(__file__).resolve().with_name("payment_instruction.schema.json")
     _STATUS_PROCESSED = "processed"
     _STATUS_FAILED = "failed"
+    _DOMESTIC_QUEUE = "CSV.PAYMENTS.DOMESTIC.REQ"
+    _CROSS_BORDER_QUEUE = "CSV.PAYMENTS.CROSS_BORDER.REQ"
 
     @classmethod
     def handle_message(cls, channel: Any, method: Any, properties: Any, body: bytes) -> dict[str, Any]:
@@ -40,8 +47,17 @@ class PaymentRequestHandler:
             payload = cls._build_payload(cls._decode_message(body))
             transfer_id = str(payload.get("transfer_id", "")).strip() or "unknown"
             cls._validate_payload(payload)
-            # TODO: Add mapping logic to convert the message to ISO20022 and forward it to message adapter for further processing
-            # END;
+            processing_status, status_code, status_description = cls._post_to_iso20022_adapter(
+                queue_name=queue_name,
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+
+            if not processing_status:
+                raise PaymentRequestProcessingError(
+                    cls._format_processing_error(status_code, status_description)
+                )
+            
             cls._mark_status(
                 transfer_id=transfer_id,
                 status=cls._STATUS_PROCESSED,
@@ -72,6 +88,42 @@ class PaymentRequestHandler:
                 exc,
             )
             raise
+
+    @classmethod
+    def _post_to_iso20022_adapter(
+        cls,
+        *,
+        queue_name: str,
+        payload: dict[str, Any],
+        correlation_id: str,
+    ) -> AdapterProcessingResult:
+        transfer_id = str(payload.get("transfer_id", "")).strip() or "unknown"
+
+        if queue_name == cls._DOMESTIC_QUEUE:
+            Logging.info(
+                "Processing domestic payment request transfer_id=%s correlation_id=%s",
+                transfer_id,
+                correlation_id,
+            )
+            return Iso20022AdapterPoster.post_domestic(payload, correlation_id=correlation_id)
+
+        if queue_name == cls._CROSS_BORDER_QUEUE:
+            Logging.info(
+                "Processing cross-border payment request transfer_id=%s correlation_id=%s",
+                transfer_id,
+                correlation_id,
+            )
+            return Iso20022AdapterPoster.post_crossborder(payload, correlation_id=correlation_id)
+
+        raise PaymentRequestProcessingError(
+            f"Miss Configuration detected. Unsupported queue: {queue_name}"
+        )
+
+    @classmethod
+    def _format_processing_error(cls, status_code: str, status_description: str) -> str:
+        safe_status_code = str(status_code).strip() or "UNKNOWN"
+        safe_status_description = str(status_description).strip() or "Unknown processing error"
+        return f"{safe_status_code}:{safe_status_description}"
 
     @classmethod
     def _build_payload(cls, data: Mapping[str, Any]) -> dict[str, Any]:

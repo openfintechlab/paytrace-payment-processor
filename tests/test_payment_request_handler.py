@@ -5,8 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from src.domain.PaymentRequestHandler import PaymentRequestHandler, PaymentRequestProcessingError
-
-
 @pytest.fixture(autouse=True)
 def reset_handler_caches():
     PaymentRequestHandler._load_schema.cache_clear()
@@ -44,6 +42,7 @@ def _valid_payload() -> dict[str, object]:
 
 def test_handle_message_marks_processed_for_valid_message(monkeypatch):
     calls: list[tuple[str, dict[str, object]]] = []
+    post_calls: list[tuple[str, dict[str, object]]] = []
     method = SimpleNamespace(routing_key="CSV.PAYMENTS.DOMESTIC.REQ")
     properties = SimpleNamespace(correlation_id="corr-1")
 
@@ -51,6 +50,13 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
         payment_request_handler_module.DBHelper,
         "execute_update",
         lambda query, params=None: calls.append((query, params or {})) or 1,
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.Iso20022AdapterPoster,
+        "post_domestic",
+        lambda payload, *, correlation_id: post_calls.append(
+            ("domestic", {"payload": payload, "correlation_id": correlation_id})
+        ) or (True, "SUCCESS", "Domestic payment message posted successfully"),
     )
 
     payload = PaymentRequestHandler.handle_message(
@@ -68,6 +74,7 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
     )
 
     assert payload["transfer_id"] == "tx-123"
+    assert post_calls == [("domestic", {"payload": payload, "correlation_id": "corr-1"})]
     assert len(calls) == 1
     assert calls[0][1]["transfer_id"] == "tx-123"
     assert calls[0][1]["status"] == "processed"
@@ -126,6 +133,7 @@ def test_handle_message_marks_failed_for_non_json_message(monkeypatch):
 
 def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
     calls: list[tuple[str, dict[str, object]]] = []
+    post_calls: list[tuple[str, dict[str, object]]] = []
     method = SimpleNamespace(routing_key="CSV.PAYMENTS.CROSS_BORDER.REQ")
     properties = SimpleNamespace(correlation_id="PTX-0000002")
 
@@ -133,6 +141,13 @@ def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
         payment_request_handler_module.DBHelper,
         "execute_update",
         lambda query, params=None: calls.append((query, params or {})) or 1,
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.Iso20022AdapterPoster,
+        "post_crossborder",
+        lambda payload, *, correlation_id: post_calls.append(
+            ("crossborder", {"payload": payload, "correlation_id": correlation_id})
+        ) or (True, "SUCCESS", "Cross-border payment message posted successfully"),
     )
 
     payload = PaymentRequestHandler.handle_message(
@@ -154,5 +169,77 @@ def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
     assert payload["amount"] == Decimal("1200.00")
     assert payload["exchange_rate"] == Decimal("1.0000")
     assert "intermediary_bank_bic" not in payload
+    assert post_calls == [("crossborder", {"payload": payload, "correlation_id": "PTX-0000002"})]
     assert calls[0][1]["transfer_id"] == "PTX-0000002"
     assert calls[0][1]["status"] == "processed"
+
+
+def test_handle_message_marks_failed_for_unsupported_queue(monkeypatch):
+    calls: list[dict[str, object]] = []
+    method = SimpleNamespace(routing_key="CSV.PAYMENTS.UNKNOWN.REQ")
+    properties = SimpleNamespace(correlation_id="corr-4")
+
+    monkeypatch.setattr(
+        payment_request_handler_module.DBHelper,
+        "execute_update",
+        lambda query, params=None: calls.append(params or {}) or 1,
+    )
+
+    with pytest.raises(PaymentRequestProcessingError, match="Unsupported queue"):
+        PaymentRequestHandler.handle_message(
+            channel=None,
+            method=method,
+            properties=properties,
+            body=(
+                b'{"transfer_id":"tx-124","transfer_type":"DOMESTIC","transaction_datetime":"2026-03-19T10:15:30Z",'
+                b'"requested_execution_date":"2026-03-20","amount":10.50,"currency":"USD","debtor_name":"John Debtor",'
+                b'"debtor_country":"US","debtor_account_scheme":"IBAN","debtor_account_id":"US00TEST00000000000000000000000001",'
+                b'"debtor_bank_id_scheme":"BIC","debtor_bank_id":"DEBTUSB1","creditor_name":"Jane Creditor",'
+                b'"creditor_country":"US","creditor_account_scheme":"IBAN","creditor_account_id":"US00TEST00000000000000000000000002",'
+                b'"creditor_bank_id_scheme":"BIC","creditor_bank_id":"CREDUSB1"}'
+            ),
+        )
+
+    assert calls[0]["transfer_id"] == "tx-124"
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["request_queue"] == "CSV.PAYMENTS.UNKNOWN.REQ"
+
+
+def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeypatch):
+    calls: list[dict[str, object]] = []
+    method = SimpleNamespace(routing_key="CSV.PAYMENTS.DOMESTIC.REQ")
+    properties = SimpleNamespace(correlation_id="corr-5")
+
+    monkeypatch.setattr(
+        payment_request_handler_module.DBHelper,
+        "execute_update",
+        lambda query, params=None: calls.append(params or {}) or 1,
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.Iso20022AdapterPoster,
+        "post_domestic",
+        lambda payload, *, correlation_id: (False, "ISO_422", "Adapter validation failed"),
+    )
+
+    with pytest.raises(
+        PaymentRequestProcessingError,
+        match="ISO_422:Adapter validation failed",
+    ):
+        PaymentRequestHandler.handle_message(
+            channel=None,
+            method=method,
+            properties=properties,
+            body=(
+                b'{"transfer_id":"tx-125","transfer_type":"DOMESTIC","transaction_datetime":"2026-03-19T10:15:30Z",'
+                b'"requested_execution_date":"2026-03-20","amount":10.50,"currency":"USD","debtor_name":"John Debtor",'
+                b'"debtor_country":"US","debtor_account_scheme":"IBAN","debtor_account_id":"US00TEST00000000000000000000000001",'
+                b'"debtor_bank_id_scheme":"BIC","debtor_bank_id":"DEBTUSB1","creditor_name":"Jane Creditor",'
+                b'"creditor_country":"US","creditor_account_scheme":"IBAN","creditor_account_id":"US00TEST00000000000000000000000002",'
+                b'"creditor_bank_id_scheme":"BIC","creditor_bank_id":"CREDUSB1"}'
+            ),
+        )
+
+    assert calls[0]["transfer_id"] == "tx-125"
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["request_queue"] == "CSV.PAYMENTS.DOMESTIC.REQ"
+    assert calls[0]["error_message"] == "ISO_422:Adapter validation failed"
