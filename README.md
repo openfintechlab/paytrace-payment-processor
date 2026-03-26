@@ -172,17 +172,87 @@ Optional:
 
 When the service starts, it creates a persistent RabbitMQ listener and begins consuming from both configured request queues. If RabbitMQ cannot be reached after the configured `OFTL_RABITMQ_CONN_RETRYCOUNT` attempts, the processor exits with status code `99`.
 
+### ISO 20022 Adapter
+
+- `OFTL_HTTPURL_ISO20022ADAP`: ISO 20022 adapter endpoint used for `pain.001` HTTP POST requests
+- `OFTL_HTTPURL_ISO20022TIMEOUT`: HTTP timeout in seconds for adapter calls (default: `5`)
+
+The payment processor maps validated queue messages to ISO 20022 `pain.001.001.03`, POSTs the XML to the configured adapter endpoint, parses the returned `pacs.002` status report, and uses that response to determine whether the request should be marked as processed or failed.
+
 ## Queue Message Format
 
-Inbound RabbitMQ messages must be valid JSON objects that conform to [`payment_instruction.schema.json`](/Users/furqanbaqai/Source/openfintechlab/paytrace/paytrace-payment-processor/src/domain/payment_instruction.schema.json). This JSON is received as the input message body from the queue and is validated by [`PaymentRequestHandler.py`](/Users/furqanbaqai/Source/openfintechlab/paytrace/paytrace-payment-processor/src/domain/PaymentRequestHandler.py).
+Inbound RabbitMQ messages must be valid JSON objects that conform to `payment_instruction.schema.json`. This JSON is received as the input message body from the queue and is validated by `PaymentRequestHandler.py`
+
+### Sample DOMESTIC payment request message
 
 Example input message received from the queue:
 
-```text
-'{"transfer_id":"PTX-0000001","transfer_type":"DOMESTIC","transaction_datetime":"2026-03-03T10:15:30+00:00","requested_execution_date":"2026-03-04","amount":"2500.00","currency":"AED","purpose_code":"SUPP","charge_bearer":"SHAR","exchange_rate":null,"debtor_name":"Sharjah Trading LLC","debtor_country":"AE","debtor_account_scheme":"IBAN","debtor_account_id":"AE070331234567890123456","debtor_bank_id_scheme":"BIC","debtor_bank_id":"SIBUAEAD","creditor_name":"Desert Supplies FZC","creditor_country":"AE","creditor_account_scheme":"IBAN","creditor_account_id":"AE170540123456789012345","creditor_bank_id_scheme":"LOCAL","creditor_bank_id":"EBILAEAD","intermediary_bank_bic":null,"remittance_unstructured":"Invoice 7843 - office supplies","remittance_reference":"INV-7843"}'
+```json
+{
+  "transfer_id": "PTX-0000001",
+  "transfer_type": "DOMESTIC",
+  "transaction_datetime": "2026-03-03T10:15:30+00:00",
+  "requested_execution_date": "2026-03-04",
+  "amount": "2500.00",
+  "currency": "AED",
+  "purpose_code": "SUPP",
+  "charge_bearer": "SHAR",
+  "exchange_rate": null,
+  "debtor_name": "Sharjah Trading LLC",
+  "debtor_country": "AE",
+  "debtor_account_scheme": "IBAN",
+  "debtor_account_id": "AE070331234567890123456",
+  "debtor_bank_id_scheme": "BIC",
+  "debtor_bank_id": "SIBUAEAD",
+  "creditor_name": "Desert Supplies FZC",
+  "creditor_country": "AE",
+  "creditor_account_scheme": "IBAN",
+  "creditor_account_id": "AE170540123456789012345",
+  "creditor_bank_id_scheme": "LOCAL",
+  "creditor_bank_id": "EBILAEAD",
+  "intermediary_bank_bic": null,
+  "remittance_unstructured": "Invoice 7843 - office supplies",
+  "remittance_reference": "INV-7843"
+}
 ```
 
 This sample represents a domestic payment request message consumed from `CSV.PAYMENTS.DOMESTIC.REQ`.
+
+### Sample CROSS-BORDER payment request message
+
+Example input message received from the queue:
+
+```json
+{
+  "transfer_id": "PTX-0000002",
+  "transfer_type": "CROSS_BORDER",
+  "transaction_datetime": "2026-03-03T10:20:00+00:00",
+  "requested_execution_date": "2026-03-04",
+  "amount": "1200.00",
+  "currency": "USD",
+  "purpose_code": "INVC",
+  "charge_bearer": "SHAR",
+  "exchange_rate": "1.0000",
+  "debtor_name": "Sharjah Trading LLC",
+  "debtor_country": "AE",
+  "debtor_account_scheme": "IBAN",
+  "debtor_account_id": "AE070331234567890123456",
+  "debtor_bank_id_scheme": "BIC",
+  "debtor_bank_id": "SIBUAEAD",
+  "creditor_name": "Global Parts Ltd",
+  "creditor_country": "GB",
+  "creditor_account_scheme": "IBAN",
+  "creditor_account_id": "GB33BUKB20201555555555",
+  "creditor_bank_id_scheme": "BIC",
+  "creditor_bank_id": "BUKBGB22",
+  "intermediary_bank_bic": null,
+  "remittance_unstructured": "Invoice 9912 - spare parts",
+  "remittance_reference": "INV-9912"
+}
+```
+
+This sample represents a cross-border payment request message consumed from `CSV.PAYMENTS.CROSS_BORDER.REQ`.
+
 
 ## Default Routes
 

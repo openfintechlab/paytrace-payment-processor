@@ -211,12 +211,7 @@ class RabbitMQHelper:
 
         try:
             payload = cls._decode_body(body)
-            Logging.info(
-                "Received RabbitMQ payment request from queue=%s correlation_id=%s payload=%s",
-                queue_name,
-                correlation_id or "N/A",
-                payload,
-            )
+            Logging.info("Received RabbitMQ request from queue=%s correlation_id=%s",queue_name,correlation_id or "N/A")
             if cls._message_handler is not None:
                 Logging.info(
                     "Calling RabbitMQ message handler for queue=%s correlation_id=%s",

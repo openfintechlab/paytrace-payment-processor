@@ -56,10 +56,15 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
         "post_domestic",
         lambda payload, *, correlation_id: post_calls.append(
             ("domestic", {"payload": payload, "correlation_id": correlation_id})
-        ) or (True, "SUCCESS", "Domestic payment message posted successfully"),
+        ) or (
+            True,
+            "ACTC",
+            "Accepted",
+            {"success": True, "status_code": "ACTC", "status_description": "Accepted"},
+        ),
     )
 
-    payload = PaymentRequestHandler.handle_message(
+    result = PaymentRequestHandler.handle_message(
         channel=None,
         method=method,
         properties=properties,
@@ -73,7 +78,9 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
         ),
     )
 
+    payload = result["payload"]
     assert payload["transfer_id"] == "tx-123"
+    assert result["adapter_response"]["status_code"] == "ACTC"
     assert post_calls == [("domestic", {"payload": payload, "correlation_id": "corr-1"})]
     assert len(calls) == 1
     assert calls[0][1]["transfer_id"] == "tx-123"
@@ -147,10 +154,19 @@ def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
         "post_crossborder",
         lambda payload, *, correlation_id: post_calls.append(
             ("crossborder", {"payload": payload, "correlation_id": correlation_id})
-        ) or (True, "SUCCESS", "Cross-border payment message posted successfully"),
+        ) or (
+            True,
+            "ACSP",
+            "Accepted settlement in process",
+            {
+                "success": True,
+                "status_code": "ACSP",
+                "status_description": "Accepted settlement in process",
+            },
+        ),
     )
 
-    payload = PaymentRequestHandler.handle_message(
+    result = PaymentRequestHandler.handle_message(
         channel=None,
         method=method,
         properties=properties,
@@ -166,9 +182,11 @@ def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
         ),
     )
 
+    payload = result["payload"]
     assert payload["amount"] == Decimal("1200.00")
     assert payload["exchange_rate"] == Decimal("1.0000")
     assert "intermediary_bank_bic" not in payload
+    assert result["adapter_response"]["status_code"] == "ACSP"
     assert post_calls == [("crossborder", {"payload": payload, "correlation_id": "PTX-0000002"})]
     assert calls[0][1]["transfer_id"] == "PTX-0000002"
     assert calls[0][1]["status"] == "processed"
@@ -218,12 +236,21 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
     monkeypatch.setattr(
         payment_request_handler_module.Iso20022AdapterPoster,
         "post_domestic",
-        lambda payload, *, correlation_id: (False, "ISO_422", "Adapter validation failed"),
+        lambda payload, *, correlation_id: (
+            False,
+            "RJCT",
+            "Adapter validation failed",
+            {
+                "success": False,
+                "status_code": "RJCT",
+                "status_description": "Adapter validation failed",
+            },
+        ),
     )
 
     with pytest.raises(
         PaymentRequestProcessingError,
-        match="ISO_422:Adapter validation failed",
+        match="RJCT:Adapter validation failed",
     ):
         PaymentRequestHandler.handle_message(
             channel=None,
@@ -242,4 +269,4 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
     assert calls[0]["transfer_id"] == "tx-125"
     assert calls[0]["status"] == "failed"
     assert calls[0]["request_queue"] == "CSV.PAYMENTS.DOMESTIC.REQ"
-    assert calls[0]["error_message"] == "ISO_422:Adapter validation failed"
+    assert calls[0]["error_message"] == "RJCT:Adapter validation failed"

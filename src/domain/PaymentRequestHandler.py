@@ -25,7 +25,7 @@ class PaymentRequestProcessingError(ValueError):
     """Raised when a payment request cannot be parsed or validated."""
 
 
-AdapterProcessingResult = tuple[bool, str, str]
+AdapterProcessingResult = tuple[bool, str, str, dict[str, Any]]
 
 
 class PaymentRequestHandler:
@@ -42,12 +42,13 @@ class PaymentRequestHandler:
         queue_name = getattr(method, "routing_key", "unknown")
         correlation_id = getattr(properties, "correlation_id", None) or "N/A"
         transfer_id = "unknown"
+        adapter_response: dict[str, Any] | None = None
 
         try:
             payload = cls._build_payload(cls._decode_message(body))
             transfer_id = str(payload.get("transfer_id", "")).strip() or "unknown"
             cls._validate_payload(payload)
-            processing_status, status_code, status_description = cls._post_to_iso20022_adapter(
+            processing_status, status_code, status_description, adapter_response = cls._post_to_iso20022_adapter(
                 queue_name=queue_name,
                 payload=payload,
                 correlation_id=correlation_id,
@@ -57,7 +58,6 @@ class PaymentRequestHandler:
                 raise PaymentRequestProcessingError(
                     cls._format_processing_error(status_code, status_description)
                 )
-            
             cls._mark_status(
                 transfer_id=transfer_id,
                 status=cls._STATUS_PROCESSED,
@@ -70,7 +70,10 @@ class PaymentRequestHandler:
                 queue_name,
                 correlation_id,
             )
-            return payload
+            return {
+                "payload": payload,
+                "adapter_response": adapter_response,
+            }
         except Exception as exc:
             if transfer_id == "unknown":
                 transfer_id = cls._extract_transfer_id(body)
