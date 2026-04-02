@@ -176,6 +176,12 @@ When the service starts, it creates a persistent RabbitMQ listener and begins co
 
 - `OFTL_HTTPURL_ISO20022ADAP`: ISO 20022 adapter endpoint used for `pain.001` HTTP POST requests
 - `OFTL_HTTPURL_ISO20022TIMEOUT`: HTTP timeout in seconds for adapter calls (default: `5`)
+- `OFTL_HTTP_AUTHORIZATION_SECRET`: optional bearer token or secret reference for outbound `Authorization` header
+- `OFTL_HTTP_X_TRANSACTION_ID`: optional default outbound `x-transaction-id` header; falls back to `transfer_id`
+- `OFTL_HTTP_X_CORRELATION_ID`: optional default outbound `x-correlation-id` header; falls back to queue message correlation ID
+- `OFTL_HTTP_IDEMPOTENCY_KEY`: optional default outbound `idempotency-key` header; falls back to `transfer_id`
+- `OFTL_HTTP_ACCEPT_LANGUAGE`: optional outbound `Accept-Language` header (example: `en-US`)
+- `OFTL_HTTP_CONTENT_TYPE`: outbound `Content-Type` header (default: `application/xml`)
 
 The payment processor maps validated queue messages to ISO 20022 `pain.001.001.03`, POSTs the XML to the configured adapter endpoint, parses the returned `pacs.002` status report, and uses that response to determine whether the request should be marked as processed or failed.
 

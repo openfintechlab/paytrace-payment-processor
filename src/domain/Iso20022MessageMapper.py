@@ -91,9 +91,13 @@ class Iso20022MessageMapper:
 
     @classmethod
     def _parse_xml_root(cls, xml_message: str) -> tuple[str, ET.Element]:
+        candidates = cls._xml_parse_candidates(xml_message)
+        if not candidates:
+            raise ET.ParseError("No XML content found in adapter response.")
+
         parse_errors: list[ET.ParseError] = []
 
-        for candidate in cls._xml_parse_candidates(xml_message):
+        for candidate in candidates:
             try:
                 return candidate, ET.fromstring(candidate)
             except ET.ParseError as exc:

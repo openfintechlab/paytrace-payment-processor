@@ -116,6 +116,12 @@ def test_post_domestic_posts_xml_and_parses_response(monkeypatch):
         lambda key, default=None: {
             "OFTL_HTTPURL_ISO20022ADAP": "http://localhost:8082/iso20022",
             "OFTL_HTTPURL_ISO20022TIMEOUT": "7",
+            "OFTL_HTTP_AUTHORIZATION_SECRET": "Bearer rnd-auth-123",
+            "OFTL_HTTP_X_TRANSACTION_ID": "txn-rnd-456",
+            "OFTL_HTTP_X_CORRELATION_ID": "corr-rnd-789",
+            "OFTL_HTTP_IDEMPOTENCY_KEY": "idem-rnd-999",
+            "OFTL_HTTP_ACCEPT_LANGUAGE": "en-US",
+            "OFTL_HTTP_CONTENT_TYPE": "application/xml",
         }.get(key, default),
     )
     monkeypatch.setattr(iso20022_adapter_poster_module.request, "urlopen", fake_urlopen)
@@ -132,7 +138,11 @@ def test_post_domestic_posts_xml_and_parses_response(monkeypatch):
     assert captured["url"] == "http://localhost:8082/iso20022"
     assert captured["timeout"] == 7.0
     assert "application/xml" in captured["headers"]["Content-type"]
-    assert captured["headers"]["X-correlation-id"] == "corr-123"
+    assert captured["headers"]["Authorization"] == "Bearer rnd-auth-123"
+    assert captured["headers"]["X-transaction-id"] == "txn-rnd-456"
+    assert captured["headers"]["X-correlation-id"] == "corr-rnd-789"
+    assert captured["headers"]["Idempotency-key"] == "idem-rnd-999"
+    assert captured["headers"]["Accept-language"] == "en-US"
     assert "<Document" in captured["body"]
 
 
@@ -141,3 +151,134 @@ def test_post_domestic_requires_adapter_url(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Missing ISO20022 adapter URL"):
         Iso20022AdapterPoster.post_domestic(_valid_payload(), correlation_id="corr-123")
+
+
+def test_post_domestic_uses_runtime_identifiers_when_http_header_defaults_missing(monkeypatch):
+    captured: dict[str, object] = {}
+    response_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+      <FIToFIPmtStsRpt>
+        <TxInfAndSts>
+          <TxSts>ACTC</TxSts>
+        </TxInfAndSts>
+      </FIToFIPmtStsRpt>
+    </Document>
+    """
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self) -> bytes:
+            return response_xml.encode("utf-8")
+
+    def fake_urlopen(http_request, timeout):
+        captured["headers"] = dict(http_request.header_items())
+        return DummyResponse()
+
+    monkeypatch.setattr(
+        iso20022_adapter_poster_module.ConfigLoader,
+        "get",
+        lambda key, default=None: {
+            "OFTL_HTTPURL_ISO20022ADAP": "http://localhost:8082/iso20022",
+            "OFTL_HTTPURL_ISO20022TIMEOUT": "7",
+        }.get(key, default),
+    )
+    monkeypatch.setattr(iso20022_adapter_poster_module.request, "urlopen", fake_urlopen)
+
+    Iso20022AdapterPoster.post_domestic(_valid_payload(), correlation_id="corr-123")
+
+    assert captured["headers"]["X-transaction-id"] == "PTX-0000001"
+    assert captured["headers"]["X-correlation-id"] == "corr-123"
+    assert captured["headers"]["Idempotency-key"] == "PTX-0000001"
+
+
+def test_post_domestic_follows_temporary_redirect_for_post(monkeypatch):
+    captured_urls: list[str] = []
+    response_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+      <FIToFIPmtStsRpt>
+        <TxInfAndSts>
+          <TxSts>ACTC</TxSts>
+        </TxInfAndSts>
+      </FIToFIPmtStsRpt>
+    </Document>
+    """
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self) -> bytes:
+            return response_xml.encode("utf-8")
+
+    def fake_urlopen(http_request, timeout):
+        captured_urls.append(http_request.full_url)
+        if len(captured_urls) == 1:
+            raise iso20022_adapter_poster_module.error.HTTPError(
+                http_request.full_url,
+                307,
+                "Temporary Redirect",
+                {"Location": "/adapter/iso20022/"},
+                None,
+            )
+        return DummyResponse()
+
+    monkeypatch.setattr(
+        iso20022_adapter_poster_module.ConfigLoader,
+        "get",
+        lambda key, default=None: {
+            "OFTL_HTTPURL_ISO20022ADAP": "http://localhost:8081/adapter/iso20022",
+            "OFTL_HTTPURL_ISO20022TIMEOUT": "7",
+        }.get(key, default),
+    )
+    monkeypatch.setattr(iso20022_adapter_poster_module.request, "urlopen", fake_urlopen)
+
+    success, status_code, _, _ = Iso20022AdapterPoster.post_domestic(
+        _valid_payload(),
+        correlation_id="corr-123",
+    )
+
+    assert success is True
+    assert status_code == "ACTC"
+    assert captured_urls == [
+        "http://localhost:8081/adapter/iso20022",
+        "http://localhost:8081/adapter/iso20022/",
+    ]
+
+
+def test_post_domestic_returns_http_error_result_when_redirect_body_is_empty(monkeypatch):
+    def fake_urlopen(http_request, timeout):
+        raise iso20022_adapter_poster_module.error.HTTPError(
+            http_request.full_url,
+            307,
+            "Temporary Redirect",
+            {},
+            None,
+        )
+
+    monkeypatch.setattr(
+        iso20022_adapter_poster_module.ConfigLoader,
+        "get",
+        lambda key, default=None: {
+            "OFTL_HTTPURL_ISO20022ADAP": "http://localhost:8081/adapter/iso20022",
+            "OFTL_HTTPURL_ISO20022TIMEOUT": "7",
+        }.get(key, default),
+    )
+    monkeypatch.setattr(iso20022_adapter_poster_module.request, "urlopen", fake_urlopen)
+
+    success, status_code, status_description, adapter_response = Iso20022AdapterPoster.post_domestic(
+        _valid_payload(),
+        correlation_id="corr-123",
+    )
+
+    assert success is False
+    assert status_code == "HTTP_307"
+    assert status_description == "HTTP Error 307: Temporary Redirect"
+    assert adapter_response["raw_message"] == ""

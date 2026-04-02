@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from urllib.parse import urljoin
 from urllib import error, request
 from typing import Any
 
@@ -19,7 +20,8 @@ except ImportError:  # pragma: no cover - package import fallback
 class Iso20022AdapterPoster:
     """Encapsulate queue-specific posting behavior for ISO 20022 adapter messages."""
 
-    _DEFAULT_TIMEOUT_SECONDS = 5.0    
+    _DEFAULT_TIMEOUT_SECONDS = 5.0
+    _REDIRECT_STATUS_CODES = {307, 308}
 
     @classmethod
     def post_domestic(
@@ -64,21 +66,21 @@ class Iso20022AdapterPoster:
         endpoint = cls._adapter_url()
         timeout_seconds = cls._timeout_seconds()
         xml_payload = Iso20022MessageMapper.build_pain_001(payload)
-
-        request_headers = {
-            "Content-Type": "application/xml",
-            "Accept": "application/xml",
-            "X-Correlation-Id": correlation_id,
-        }
-        http_request = request.Request(
-            endpoint,
-            data=xml_payload.encode("utf-8"),
-            headers=request_headers,
-            method="POST",
+        request_headers = cls._request_headers(
+            transfer_id=transfer_id,
+            correlation_id=correlation_id,
         )
+        request_body = xml_payload.encode("utf-8")
 
         try:
-            with request.urlopen(http_request, timeout=timeout_seconds) as response:
+            with cls._open_request(
+                endpoint=endpoint,
+                request_body=request_body,
+                request_headers=request_headers,
+                timeout_seconds=timeout_seconds,
+                transfer_id=transfer_id,
+                correlation_id=correlation_id,
+            ) as response:
                 response_body = response.read().decode("utf-8")
         except error.HTTPError as exc:
             response_body = exc.read().decode("utf-8", errors="replace")
@@ -120,6 +122,56 @@ class Iso20022AdapterPoster:
         )
 
     @classmethod
+    def _open_request(
+        cls,
+        *,
+        endpoint: str,
+        request_body: bytes,
+        request_headers: dict[str, str],
+        timeout_seconds: float,
+        transfer_id: str,
+        correlation_id: str,
+    ):
+        current_endpoint = endpoint
+
+        for redirect_count in range(2):
+            http_request = request.Request(
+                current_endpoint,
+                data=request_body,
+                headers=request_headers,
+                method="POST",
+            )
+            try:
+                return request.urlopen(http_request, timeout=timeout_seconds)
+            except error.HTTPError as exc:
+                if exc.code not in cls._REDIRECT_STATUS_CODES:
+                    raise
+
+                redirected_endpoint = cls._redirect_location(exc, current_endpoint)
+                if not redirected_endpoint:
+                    raise
+
+                Logging.info(
+                    "Following ISO20022 adapter redirect transfer_id=%s correlation_id=%s status=%s location=%s",
+                    transfer_id,
+                    correlation_id,
+                    exc.code,
+                    redirected_endpoint,
+                )
+                current_endpoint = redirected_endpoint
+
+        raise RuntimeError(
+            f"ISO20022 adapter redirect loop detected for endpoint {endpoint}"
+        )
+
+    @classmethod
+    def _redirect_location(cls, http_error: error.HTTPError, current_endpoint: str) -> str:
+        location = http_error.headers.get("Location")
+        if not location:
+            return ""
+        return urljoin(current_endpoint, location.strip())
+
+    @classmethod
     def _parse_response_or_fallback(
         cls,
         response_body: str,
@@ -158,3 +210,35 @@ class Iso20022AdapterPoster:
         if timeout <= 0:
             raise RuntimeError("OFTL_HTTPURL_ISO20022TIMEOUT must be greater than zero.")
         return timeout
+
+    @classmethod
+    def _request_headers(
+        cls,
+        *,
+        transfer_id: str,
+        correlation_id: str,
+    ) -> dict[str, str]:
+        content_type = cls._config_value("OFTL_HTTP_CONTENT_TYPE") or "application/xml"
+        authorization = cls._config_value("OFTL_HTTP_AUTHORIZATION_SECRET")
+        accept_language = cls._config_value("OFTL_HTTP_ACCEPT_LANGUAGE")
+        transaction_id = cls._config_value("OFTL_HTTP_X_TRANSACTION_ID") or transfer_id
+        outbound_correlation_id = cls._config_value("OFTL_HTTP_X_CORRELATION_ID") or correlation_id
+        idempotency_key = cls._config_value("OFTL_HTTP_IDEMPOTENCY_KEY") or transfer_id
+
+        headers = {
+            "Content-Type": content_type,
+            "Accept": "application/xml",
+            "x-transaction-id": transaction_id,
+            "x-correlation-id": outbound_correlation_id,
+            "idempotency-key": idempotency_key,
+        }
+        if authorization:
+            headers["Authorization"] = authorization
+        if accept_language:
+            headers["Accept-Language"] = accept_language
+        return headers
+
+    @classmethod
+    def _config_value(cls, key: str) -> str:
+        raw_value = ConfigLoader.get(key)
+        return str(raw_value).strip() if raw_value is not None else ""
