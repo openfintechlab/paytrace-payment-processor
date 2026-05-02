@@ -1,3 +1,4 @@
+import importlib
 import os
 from unittest.mock import Mock
 
@@ -5,12 +6,15 @@ import pytest
 
 from src.utilities.ConfigLoader import ConfigLoader
 
+config_loader_module = importlib.import_module("src.utilities.ConfigLoader")
+
 
 @pytest.fixture(autouse=True)
 def reset_config_loader_state(monkeypatch):
     """Reset loader state and isolate OFTL_* environment between tests."""
     # Avoid reading developer/local .env files during tests.
     monkeypatch.setattr(ConfigLoader._env, "read_env", lambda *args, **kwargs: None)
+    monkeypatch.setattr(config_loader_module, "dotenv_values", Mock(return_value={}))
 
     # Remove existing OFTL_ keys that may be present in runner environment.
     existing_oftl_keys = [key for key in os.environ if key.startswith("OFTL_")]
@@ -73,6 +77,29 @@ def test_load_configurations_loads_only_valid_oftl_keys(monkeypatch):
         "OFTL_API_KEY_SECRET": "decrypted-value",
     }
     decrypt_mock.assert_called_once_with("encrypted-value")
+
+
+def test_load_configurations_reads_project_env_file(monkeypatch):
+    dotenv_values_mock = Mock(return_value={"OFTL_FILE_VALUE": "from-file"})
+    monkeypatch.setattr(config_loader_module, "dotenv_values", dotenv_values_mock)
+
+    loaded = ConfigLoader.load_configurations()
+
+    assert loaded["OFTL_FILE_VALUE"] == "from-file"
+    dotenv_values_mock.assert_called_once_with(ConfigLoader._ENV_FILE)
+
+
+def test_process_environment_overrides_env_file(monkeypatch):
+    monkeypatch.setattr(
+        config_loader_module,
+        "dotenv_values",
+        Mock(return_value={"OFTL_RABITMQ_USERNAME": "from-file"}),
+    )
+    monkeypatch.setenv("OFTL_RABITMQ_USERNAME", "from-process")
+
+    loaded = ConfigLoader.load_configurations()
+
+    assert loaded["OFTL_RABITMQ_USERNAME"] == "from-process"
 
 
 def test_load_configurations_boundary_empty_values(monkeypatch):

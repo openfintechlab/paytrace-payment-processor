@@ -7,11 +7,13 @@ from src.utilities.DBHelper import DBHelper
 
 
 db_helper_module = importlib.import_module("src.utilities.DBHelper")
+config_loader_module = importlib.import_module("src.utilities.ConfigLoader")
 
 
 @pytest.fixture(autouse=True)
 def reset_db_helper_state(monkeypatch):
     monkeypatch.setattr(ConfigLoader._env, "read_env", lambda *args, **kwargs: None)
+    monkeypatch.setattr(config_loader_module, "dotenv_values", lambda _: {})
     ConfigLoader.configurations = {}
     DBHelper.dispose_connection()
     yield

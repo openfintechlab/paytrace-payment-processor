@@ -9,6 +9,9 @@ import atexit
 import json
 import os
 import time
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 
@@ -203,6 +206,86 @@ class RabbitMQHelper:
             )
             Logging.info("RabbitMQ listener bound to queue: %s", queue_name)
         return channel
+
+    @classmethod
+    def publish_message(
+        cls,
+        exchange_name: str,
+        routing_key: str,
+        message: Any,
+        exchange_type: str | None = None,
+        *,
+        correlation_id: str | None = None,
+        message_id: str | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> bool:
+        """Publish a message to an exchange and routing key."""
+        pika_module = cls._require_pika()
+        resolved_exchange_type = exchange_type or str(ConfigLoader.get("OFTL_RABITMQ_EXCHANGE_TYPE", "direct"))
+        durable_exchange = cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_EXCHANGE_DURABLE", "true"), True)
+        persistent_message = cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_MESSAGE_PERSISTENT", "true"), True)
+
+        close_after_publish = False
+        if cls._channel is None or getattr(cls._channel, "is_closed", False):
+            cls._connect_consumer()
+            close_after_publish = True
+
+        if cls._channel is None:  # pragma: no cover
+            raise RuntimeError("RabbitMQ channel is not initialized.")
+
+        try:
+            cls._channel.exchange_declare(
+                exchange=exchange_name,
+                exchange_type=resolved_exchange_type,
+                durable=durable_exchange,
+            )
+            payload, content_type = cls._build_payload(message)
+            properties = pika_module.BasicProperties(
+                content_type=content_type,
+                content_encoding="utf-8",
+                delivery_mode=2 if persistent_message else 1,
+                correlation_id=correlation_id,
+                message_id=message_id,
+                headers=headers,
+            )
+            return bool(
+                cls._channel.basic_publish(
+                    exchange=exchange_name,
+                    routing_key=routing_key,
+                    body=payload,
+                    mandatory=cls._as_bool(ConfigLoader.get("OFTL_RABITMQ_PUBLISH_MANDATORY", "false"), False),
+                    properties=properties,
+                )
+            )
+        finally:
+            if close_after_publish:
+                cls._cleanup_connection()
+
+    @classmethod
+    def _build_payload(cls, message: Any) -> tuple[bytes, str]:
+        if isinstance(message, bytes):
+            return message, "application/octet-stream"
+        if isinstance(message, str):
+            return message.encode("utf-8"), "text/plain"
+        return (
+            json.dumps(
+                message,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=cls._json_default,
+            ).encode("utf-8"),
+            "application/json",
+        )
+
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        if is_dataclass(value) and not isinstance(value, type):
+            return asdict(value)
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
     @classmethod
     def _on_message(cls, channel: Any, method: Any, properties: Any, body: bytes) -> None:

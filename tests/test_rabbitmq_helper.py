@@ -98,3 +98,53 @@ def test_connect_consumer_with_retry_raises_after_configured_attempts(monkeypatc
         RabbitMQHelper._connect_consumer_with_retry()
 
     assert len(attempts) == 2
+
+
+def test_publish_message_declares_exchange_and_publishes_json(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    class FakePikaModule:
+        class PlainCredentials:
+            def __init__(self, username, password):
+                self.username = username
+                self.password = password
+
+        class ConnectionParameters:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class BasicProperties:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+    class FakeChannel:
+        is_closed = False
+
+        def exchange_declare(self, exchange, exchange_type, durable):
+            calls.append(("exchange_declare", (exchange, exchange_type, durable)))
+
+        def basic_publish(self, **kwargs):
+            calls.append(("basic_publish", kwargs))
+            return True
+
+    monkeypatch.setattr("src.utilities.RabbitMQHelper.pika", FakePikaModule)
+    RabbitMQHelper._channel = FakeChannel()
+
+    assert RabbitMQHelper.publish_message(
+        "paytrace.events",
+        "payment.row.processed",
+        {"event_code": "EV003"},
+        exchange_type="topic",
+        correlation_id="corr-1",
+        message_id="evt-1",
+        headers={"event_code": "EV003"},
+    ) is True
+
+    assert calls[0] == ("exchange_declare", ("paytrace.events", "topic", True))
+    publish_call = calls[1][1]
+    assert publish_call["exchange"] == "paytrace.events"
+    assert publish_call["routing_key"] == "payment.row.processed"
+    assert publish_call["body"] == b'{"event_code":"EV003"}'
+    assert publish_call["properties"].kwargs["correlation_id"] == "corr-1"
+    assert publish_call["properties"].kwargs["message_id"] == "evt-1"
+    assert publish_call["properties"].kwargs["headers"] == {"event_code": "EV003"}

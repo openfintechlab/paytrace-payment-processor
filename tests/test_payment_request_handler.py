@@ -6,9 +6,14 @@ import pytest
 
 from src.domain.PaymentRequestHandler import PaymentRequestHandler, PaymentRequestProcessingError
 @pytest.fixture(autouse=True)
-def reset_handler_caches():
+def reset_handler_caches(monkeypatch):
     PaymentRequestHandler._load_schema.cache_clear()
     PaymentRequestHandler._validator.cache_clear()
+    monkeypatch.setattr(
+        payment_request_handler_module.RabbitMQHelper,
+        "publish_message",
+        lambda *args, **kwargs: True,
+    )
     yield
     PaymentRequestHandler._load_schema.cache_clear()
     PaymentRequestHandler._validator.cache_clear()
@@ -43,6 +48,7 @@ def _valid_payload() -> dict[str, object]:
 def test_handle_message_marks_processed_for_valid_message(monkeypatch):
     calls: list[tuple[str, dict[str, object]]] = []
     post_calls: list[tuple[str, dict[str, object]]] = []
+    published_events: list[dict[str, object]] = []
     method = SimpleNamespace(routing_key="CSV.PAYMENTS.DOMESTIC.REQ")
     properties = SimpleNamespace(correlation_id="corr-1")
 
@@ -62,6 +68,19 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
             "Accepted",
             {"success": True, "status_code": "ACTC", "status_description": "Accepted"},
         ),
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.RabbitMQHelper,
+        "publish_message",
+        lambda exchange_name, routing_key, message, **kwargs: published_events.append(
+            {
+                "exchange_name": exchange_name,
+                "routing_key": routing_key,
+                "message": message,
+                "kwargs": kwargs,
+            }
+        )
+        or True,
     )
 
     result = PaymentRequestHandler.handle_message(
@@ -87,6 +106,19 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
     assert calls[0][1]["status"] == "processed"
     assert calls[0][1]["request_queue"] == "CSV.PAYMENTS.DOMESTIC.REQ"
     assert calls[0][1]["error_message"] is None
+    assert len(published_events) == 1
+    event = published_events[0]["message"]
+    assert published_events[0]["exchange_name"] == "paytrace.events"
+    assert published_events[0]["routing_key"] == "payment.row.processed"
+    assert event["event_code"] == "EV003"
+    assert event["event_type"] == "payment.row.processed"
+    assert event["source"] == "paytrace-payment-processor"
+    assert event["correlation_id"] == "corr-1"
+    assert event["causation_id"] == "tx-123"
+    assert event["payload"]["processing_status"] == "processed"
+    assert event["payload"]["message_payload"] == payload
+    assert event["payload"]["adapter_response"]["status_code"] == "ACTC"
+    assert published_events[0]["kwargs"]["headers"]["event_code"] == "EV003"
 
 
 def test_handle_message_marks_failed_for_invalid_message(monkeypatch):
@@ -225,6 +257,7 @@ def test_handle_message_marks_failed_for_unsupported_queue(monkeypatch):
 
 def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeypatch):
     calls: list[dict[str, object]] = []
+    published_events: list[dict[str, object]] = []
     method = SimpleNamespace(routing_key="CSV.PAYMENTS.DOMESTIC.REQ")
     properties = SimpleNamespace(correlation_id="corr-5")
 
@@ -246,6 +279,19 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
                 "status_description": "Adapter validation failed",
             },
         ),
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.RabbitMQHelper,
+        "publish_message",
+        lambda exchange_name, routing_key, message, **kwargs: published_events.append(
+            {
+                "exchange_name": exchange_name,
+                "routing_key": routing_key,
+                "message": message,
+                "kwargs": kwargs,
+            }
+        )
+        or True,
     )
 
     with pytest.raises(
@@ -270,3 +316,12 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
     assert calls[0]["status"] == "failed"
     assert calls[0]["request_queue"] == "CSV.PAYMENTS.DOMESTIC.REQ"
     assert calls[0]["error_message"] == "RJCT:Adapter validation failed"
+    assert len(published_events) == 1
+    event = published_events[0]["message"]
+    assert published_events[0]["exchange_name"] == "paytrace.events"
+    assert published_events[0]["routing_key"] == "payment.row.processed"
+    assert event["event_code"] == "EV003"
+    assert event["payload"]["processing_status"] == "failed"
+    assert event["payload"]["error_message"] == "RJCT:Adapter validation failed"
+    assert event["payload"]["message_payload"]["transfer_id"] == "tx-125"
+    assert event["payload"]["adapter_response"]["status_code"] == "RJCT"

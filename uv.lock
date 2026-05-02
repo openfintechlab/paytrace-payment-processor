@@ -135,7 +135,7 @@ wheels = [
 ]
 
 [[package]]
-name = "paytrace-core"
+name = "paytrace-payment-processor"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -144,6 +144,7 @@ dependencies = [
     { name = "pika" },
     { name = "psycopg2-binary" },
     { name = "pytest" },
+    { name = "python-dotenv" },
     { name = "sqlalchemy" },
 ]
 
@@ -154,6 +155,7 @@ requires-dist = [
     { name = "pika" },
     { name = "psycopg2-binary" },
     { name = "pytest" },
+    { name = "python-dotenv" },
     { name = "sqlalchemy" },
 ]
 

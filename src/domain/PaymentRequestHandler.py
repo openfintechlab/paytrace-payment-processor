@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
@@ -14,11 +16,15 @@ from jsonschema import Draft202012Validator, FormatChecker
 try:
     from domain.Iso20022AdapterPoster import Iso20022AdapterPoster
     from utilities.DBHelper import DBHelper
+    from utilities.ConfigLoader import ConfigLoader
     from utilities.Logging import Logging
+    from utilities.RabbitMQHelper import RabbitMQHelper
 except ImportError:  # pragma: no cover - package import fallback
     from src.domain.Iso20022AdapterPoster import Iso20022AdapterPoster
+    from src.utilities.ConfigLoader import ConfigLoader
     from src.utilities.DBHelper import DBHelper
     from src.utilities.Logging import Logging
+    from src.utilities.RabbitMQHelper import RabbitMQHelper
 
 
 class PaymentRequestProcessingError(ValueError):
@@ -36,6 +42,11 @@ class PaymentRequestHandler:
     _STATUS_FAILED = "failed"
     _DOMESTIC_QUEUE = "CSV.PAYMENTS.DOMESTIC.REQ"
     _CROSS_BORDER_QUEUE = "CSV.PAYMENTS.CROSS_BORDER.REQ"
+    _EV003_CODE = "EV003"
+    _EV003_DEFAULT_TOPIC = "payment.row.processed"
+    _EVENT_VERSION = "1.0"
+    _EVENT_SOURCE = "paytrace-payment-processor"
+    _DEFAULT_EVENT_EXCHANGE = "paytrace.events"
 
     @classmethod
     def handle_message(cls, channel: Any, method: Any, properties: Any, body: bytes) -> dict[str, Any]:
@@ -52,6 +63,14 @@ class PaymentRequestHandler:
                 queue_name=queue_name,
                 payload=payload,
                 correlation_id=correlation_id,
+            )
+            cls._emit_payment_row_processed_event(
+                message_payload=payload,
+                processing_status=cls._STATUS_PROCESSED if processing_status else cls._STATUS_FAILED,
+                correlation_id=correlation_id,
+                causation_id=transfer_id,
+                adapter_response=adapter_response,
+                error_message=None if processing_status else cls._format_processing_error(status_code, status_description),
             )
 
             if not processing_status:
@@ -91,6 +110,65 @@ class PaymentRequestHandler:
                 exc,
             )
             raise
+
+    @classmethod
+    def _emit_payment_row_processed_event(
+        cls,
+        *,
+        message_payload: dict[str, Any],
+        processing_status: str,
+        correlation_id: str,
+        causation_id: str,
+        adapter_response: dict[str, Any] | None,
+        error_message: str | None,
+    ) -> None:
+        routing_key = str(ConfigLoader.get("OFTL_RABITMQ_PUBEVENT_EV003", cls._EV003_DEFAULT_TOPIC)).strip()
+        if not routing_key:
+            raise ValueError("OFTL_RABITMQ_PUBEVENT_EV003 must be configured for EV003 publishing.")
+
+        exchange_name = str(ConfigLoader.get("OFTL_RABITMQ_SAGA_EXCHANGE", cls._DEFAULT_EVENT_EXCHANGE)).strip()
+        if not exchange_name:
+            raise ValueError("OFTL_RABITMQ_SAGA_EXCHANGE must be configured for EV003 publishing.")
+
+        event_id = str(uuid.uuid4())
+        resolved_correlation_id = str(correlation_id).strip() if correlation_id else str(uuid.uuid4())
+        resolved_causation_id = str(causation_id).strip() if causation_id else resolved_correlation_id
+        event = {
+            "event_id": event_id,
+            "event_code": cls._EV003_CODE,
+            "event_type": routing_key,
+            "event_version": cls._EVENT_VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": cls._EVENT_SOURCE,
+            "correlation_id": resolved_correlation_id,
+            "causation_id": resolved_causation_id,
+            "payload": {
+                "processing_status": processing_status,
+                "message_payload": message_payload,
+                "adapter_response": adapter_response or {},
+                "error_message": error_message,
+            },
+        }
+
+        RabbitMQHelper.publish_message(
+            exchange_name,
+            routing_key,
+            event,
+            exchange_type="topic",
+            correlation_id=resolved_correlation_id,
+            message_id=event_id,
+            headers={
+                "event_code": cls._EV003_CODE,
+                "transfer_id": str(message_payload.get("transfer_id", "")),
+                "processing_status": processing_status,
+            },
+        )
+        Logging.info(
+            "Event with ID: %s and code: %s published to topic: %s",
+            event_id,
+            cls._EV003_CODE,
+            routing_key,
+        )
 
     @classmethod
     def _post_to_iso20022_adapter(
