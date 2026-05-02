@@ -9,11 +9,18 @@ Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/14
 import sys
 import time
 
-from domain.PaymentRequestHandler import PaymentRequestHandler
-from utilities.Logging          import Logging
-from utilities.ConfigLoader     import ConfigLoader
-from utilities.DBHelper         import DBHelper
-from utilities.RabbitMQHelper   import RabbitMQConnectionError, RabbitMQHelper
+try:
+    from domain.PaymentRequestHandler import PaymentRequestHandler
+    from utilities.ConfigLoader import ConfigLoader
+    from utilities.DBHelper import DBHelper
+    from utilities.Logging import Logging
+    from utilities.RabbitMQHelper import RabbitMQConnectionError, RabbitMQHelper
+except ModuleNotFoundError:  # pragma: no cover - package execution path
+    from src.domain.PaymentRequestHandler import PaymentRequestHandler
+    from src.utilities.ConfigLoader import ConfigLoader
+    from src.utilities.DBHelper import DBHelper
+    from src.utilities.Logging import Logging
+    from src.utilities.RabbitMQHelper import RabbitMQConnectionError, RabbitMQHelper
 
 
 

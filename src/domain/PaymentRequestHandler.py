@@ -54,6 +54,8 @@ class PaymentRequestHandler:
         correlation_id = getattr(properties, "correlation_id", None) or "N/A"
         transfer_id = "unknown"
         adapter_response: dict[str, Any] | None = None
+        event_emitted = False
+        payload: dict[str, Any] = {}
 
         try:
             payload = cls._build_payload(cls._decode_message(body))
@@ -64,7 +66,7 @@ class PaymentRequestHandler:
                 payload=payload,
                 correlation_id=correlation_id,
             )
-            cls._emit_payment_row_processed_event(
+            cls._safe_emit_payment_row_processed_event(
                 message_payload=payload,
                 processing_status=cls._STATUS_PROCESSED if processing_status else cls._STATUS_FAILED,
                 correlation_id=correlation_id,
@@ -72,6 +74,7 @@ class PaymentRequestHandler:
                 adapter_response=adapter_response,
                 error_message=None if processing_status else cls._format_processing_error(status_code, status_description),
             )
+            event_emitted = True
 
             if not processing_status:
                 raise PaymentRequestProcessingError(
@@ -96,6 +99,15 @@ class PaymentRequestHandler:
         except Exception as exc:
             if transfer_id == "unknown":
                 transfer_id = cls._extract_transfer_id(body)
+            if not event_emitted:
+                cls._safe_emit_payment_row_processed_event(
+                    message_payload=payload or cls._raw_message_payload(body),
+                    processing_status=cls._STATUS_FAILED,
+                    correlation_id=correlation_id,
+                    causation_id=transfer_id,
+                    adapter_response=adapter_response,
+                    error_message=str(exc),
+                )
             cls._mark_status(
                 transfer_id=transfer_id,
                 status=cls._STATUS_FAILED,
@@ -110,6 +122,34 @@ class PaymentRequestHandler:
                 exc,
             )
             raise
+
+    @classmethod
+    def _safe_emit_payment_row_processed_event(
+        cls,
+        *,
+        message_payload: dict[str, Any],
+        processing_status: str,
+        correlation_id: str,
+        causation_id: str,
+        adapter_response: dict[str, Any] | None,
+        error_message: str | None,
+    ) -> None:
+        try:
+            cls._emit_payment_row_processed_event(
+                message_payload=message_payload,
+                processing_status=processing_status,
+                correlation_id=correlation_id,
+                causation_id=causation_id,
+                adapter_response=adapter_response,
+                error_message=error_message,
+            )
+        except Exception as event_exc:
+            Logging.error(
+                "Failed to publish EV003 event transfer_id=%s correlation_id=%s error=%s",
+                causation_id,
+                correlation_id,
+                event_exc,
+            )
 
     @classmethod
     def _emit_payment_row_processed_event(
@@ -169,6 +209,14 @@ class PaymentRequestHandler:
             cls._EV003_CODE,
             routing_key,
         )
+
+    @classmethod
+    def _raw_message_payload(cls, body: bytes) -> dict[str, Any]:
+        try:
+            decoded = cls._decode_message(body)
+        except Exception:
+            return {"raw_body": body.decode("utf-8", errors="replace")}
+        return decoded
 
     @classmethod
     def _post_to_iso20022_adapter(

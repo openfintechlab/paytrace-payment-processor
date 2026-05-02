@@ -325,3 +325,70 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
     assert event["payload"]["error_message"] == "RJCT:Adapter validation failed"
     assert event["payload"]["message_payload"]["transfer_id"] == "tx-125"
     assert event["payload"]["adapter_response"]["status_code"] == "RJCT"
+
+
+def test_handle_message_emits_failed_event_when_adapter_raises(monkeypatch):
+    calls: list[dict[str, object]] = []
+    published_events: list[dict[str, object]] = []
+    method = SimpleNamespace(routing_key="CSV.PAYMENTS.DOMESTIC.REQ")
+    properties = SimpleNamespace(correlation_id="PTX-0000001")
+
+    monkeypatch.setattr(
+        payment_request_handler_module.DBHelper,
+        "execute_update",
+        lambda query, params=None: calls.append(params or {}) or 1,
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.Iso20022AdapterPoster,
+        "post_domestic",
+        lambda payload, *, correlation_id: (_ for _ in ()).throw(
+            RuntimeError(
+                "Unable to reach ISO20022 adapter endpoint http://localhost:8081/adapter/iso20022/v1/: "
+                "[WinError 10061] No connection could be made because the target machine actively refused it"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        payment_request_handler_module.RabbitMQHelper,
+        "publish_message",
+        lambda exchange_name, routing_key, message, **kwargs: published_events.append(
+            {
+                "exchange_name": exchange_name,
+                "routing_key": routing_key,
+                "message": message,
+                "kwargs": kwargs,
+            }
+        )
+        or True,
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to reach ISO20022 adapter endpoint"):
+        PaymentRequestHandler.handle_message(
+            channel=None,
+            method=method,
+            properties=properties,
+            body=(
+                b'{"transfer_id":"PTX-0000001","transfer_type":"DOMESTIC","transaction_datetime":"2026-03-19T10:15:30Z",'
+                b'"requested_execution_date":"2026-03-20","amount":10.50,"currency":"USD","debtor_name":"John Debtor",'
+                b'"debtor_country":"US","debtor_account_scheme":"IBAN","debtor_account_id":"US00TEST00000000000000000000000001",'
+                b'"debtor_bank_id_scheme":"BIC","debtor_bank_id":"DEBTUSB1","creditor_name":"Jane Creditor",'
+                b'"creditor_country":"US","creditor_account_scheme":"IBAN","creditor_account_id":"US00TEST00000000000000000000000002",'
+                b'"creditor_bank_id_scheme":"BIC","creditor_bank_id":"CREDUSB1"}'
+            ),
+        )
+
+    assert calls[0]["transfer_id"] == "PTX-0000001"
+    assert calls[0]["status"] == "failed"
+    assert len(published_events) == 1
+    event = published_events[0]["message"]
+    assert published_events[0]["exchange_name"] == "paytrace.events"
+    assert published_events[0]["routing_key"] == "payment.row.processed"
+    assert event["event_code"] == "EV003"
+    assert event["event_type"] == "payment.row.processed"
+    assert event["source"] == "paytrace-payment-processor"
+    assert event["correlation_id"] == "PTX-0000001"
+    assert event["causation_id"] == "PTX-0000001"
+    assert event["payload"]["processing_status"] == "failed"
+    assert event["payload"]["message_payload"]["transfer_id"] == "PTX-0000001"
+    assert event["payload"]["adapter_response"] == {}
+    assert "Unable to reach ISO20022 adapter endpoint" in event["payload"]["error_message"]
