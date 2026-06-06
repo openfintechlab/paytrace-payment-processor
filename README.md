@@ -16,7 +16,7 @@ The current processor is not a FastAPI service and does not expose HTTP routes o
 - Map valid instructions to ISO 20022 `pain.001.001.03` XML.
 - POST XML to the configured ISO 20022 adapter endpoint.
 - Parse adapter `pacs.002`/payment status XML responses.
-- Mark `oftl_fwcsv_row_dispatch` rows as `processed` or `failed`.
+- Mark `oftl_fwcsv_row_dispatch` rows as `PROCESSED` or `FAILED`.
 - Publish EV003 `payment.row.processed` events for both successful and failed downstream processing outcomes.
 
 ## Project Structure
@@ -193,7 +193,7 @@ The HTTP request always includes `Accept: application/xml`.
 7. Domestic queue messages are sent through `Iso20022AdapterPoster.post_domestic()`.
 8. Cross-border queue messages are sent through `Iso20022AdapterPoster.post_crossborder()`.
 9. The adapter response is parsed. Accepted statuses are `ACTC`, `ACCP`, `ACFC`, `ACSP`, `ACSC`, `ACWC`, and `RCVD`.
-10. The worker publishes EV003 and then updates `oftl_fwcsv_row_dispatch` to `processed` or `failed`.
+10. The worker publishes EV003 and then updates `oftl_fwcsv_row_dispatch` to `PROCESSED` or `FAILED`.
 
 ## Source Messages and Events
 
@@ -204,7 +204,7 @@ The source for this processor is `paytrace-file-ingest-csv`. That worker publish
 
 The file-ingest source also publishes its own lifecycle events to `OFTL_RABITMQ_PUBEVENT_EXCHANGE`:
 
-- EV003 `payment.row.processed` when a CSV row is processed and published to RabbitMQ, with `payload.processing_status=published` or `failed`. 
+- EV003 `payment.row.processed` when a CSV row is processed and published to RabbitMQ, with `payload.processing_status=PROCESSED` or `FAILED`.
 
 > Please refer to [Paytrace Business Events](https://github.com/openfintechlab/pytrace-backlogs/wiki/Business-Events) for the EV003 schema.
 
@@ -325,8 +325,8 @@ The processor publishes EV003 to `OFTL_RABITMQ_SAGA_EXCHANGE` as a RabbitMQ `top
 
 EV003 is published for:
 
-- successful adapter processing, with `payload.processing_status=processed`
-- adapter rejection, invalid inbound messages, unsupported queues, and adapter connectivity failures, with `payload.processing_status=failed`
+- successful adapter processing, with `payload.processing_status=PROCESSED`
+- adapter rejection, invalid inbound messages, unsupported queues, and adapter connectivity failures, with `payload.processing_status=FAILED`
 
 Envelope:
 
@@ -341,7 +341,7 @@ Envelope:
   "correlation_id": "RabbitMQ correlation_id or generated UUID",
   "causation_id": "transfer_id when available",
   "payload": {
-    "processing_status": "processed",
+    "processing_status": "PROCESSED",
     "message_payload": {
       "transfer_id": "PTX-0000001"
     },
@@ -373,7 +373,7 @@ EV003 headers:
 {
   "event_code": "EV003",
   "transfer_id": "PTX-0000001",
-  "processing_status": "processed"
+  "processing_status": "PROCESSED"
 }
 ```
 
@@ -383,7 +383,7 @@ The processor writes to `oftl_fwcsv_row_dispatch` using an upsert keyed by `tran
 
 On success:
 
-- `status` is set to `processed`
+- `status` is set to `PROCESSED`
 - `request_queue` is set to the queue that delivered the message
 - `published_at` is preserved or set to `NOW()`
 - `updated_at` is set to `NOW()`
@@ -391,7 +391,7 @@ On success:
 
 On failure:
 
-- `status` is set to `failed`
+- `status` is set to `FAILED`
 - `request_queue` is set to the queue that delivered the message
 - `updated_at` is set to `NOW()`
 - `error_message` stores the failure detail, truncated to 2000 characters

@@ -38,8 +38,8 @@ class PaymentRequestHandler:
     """Validate inbound payment messages and persist processing status."""
 
     _SCHEMA_PATH = Path(__file__).resolve().with_name("payment_instruction.schema.json")
-    _STATUS_PROCESSED = "processed"
-    _STATUS_FAILED = "failed"
+    _STATUS_PROCESSED = "PROCESSED"
+    _STATUS_FAILED = "FAILED"
     _DOMESTIC_QUEUE = "CSV.PAYMENTS.DOMESTIC.REQ"
     _CROSS_BORDER_QUEUE = "CSV.PAYMENTS.CROSS_BORDER.REQ"
     _EV003_CODE = "EV003"
@@ -361,7 +361,7 @@ class PaymentRequestHandler:
                 ),
                 :request_queue,
                 :status,
-                CASE WHEN :status = 'processed' THEN NOW() ELSE NULL END,
+                CASE WHEN :status = 'PROCESSED' THEN NOW() ELSE NULL END,
                 NOW(),
                 :error_message
             )
@@ -370,7 +370,7 @@ class PaymentRequestHandler:
                 request_queue = EXCLUDED.request_queue,
                 status = EXCLUDED.status,
                 published_at = CASE
-                    WHEN EXCLUDED.status = 'processed' THEN COALESCE(oftl_fwcsv_row_dispatch.published_at, NOW())
+                    WHEN EXCLUDED.status = 'PROCESSED' THEN COALESCE(oftl_fwcsv_row_dispatch.published_at, NOW())
                     ELSE oftl_fwcsv_row_dispatch.published_at
                 END,
                 updated_at = NOW(),

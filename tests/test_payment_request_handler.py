@@ -103,9 +103,10 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
     assert post_calls == [("domestic", {"payload": payload, "correlation_id": "corr-1"})]
     assert len(calls) == 1
     assert calls[0][1]["transfer_id"] == "tx-123"
-    assert calls[0][1]["status"] == "processed"
+    assert calls[0][1]["status"] == "PROCESSED"
     assert calls[0][1]["request_queue"] == "CSV.PAYMENTS.DOMESTIC.REQ"
     assert calls[0][1]["error_message"] is None
+    assert "EXCLUDED.status = 'PROCESSED'" in calls[0][0]
     assert len(published_events) == 1
     event = published_events[0]["message"]
     assert published_events[0]["exchange_name"] == "paytrace.events"
@@ -115,7 +116,7 @@ def test_handle_message_marks_processed_for_valid_message(monkeypatch):
     assert event["source"] == "paytrace-payment-processor"
     assert event["correlation_id"] == "corr-1"
     assert event["causation_id"] == "tx-123"
-    assert event["payload"]["processing_status"] == "processed"
+    assert event["payload"]["processing_status"] == "PROCESSED"
     assert event["payload"]["message_payload"] == payload
     assert event["payload"]["adapter_response"]["status_code"] == "ACTC"
     assert published_events[0]["kwargs"]["headers"]["event_code"] == "EV003"
@@ -142,7 +143,7 @@ def test_handle_message_marks_failed_for_invalid_message(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["transfer_id"] == "tx-999"
-    assert calls[0]["status"] == "failed"
+    assert calls[0]["status"] == "FAILED"
     assert calls[0]["request_queue"] == "CSV.PAYMENTS.CROSS_BORDER.REQ"
     assert "required property" in str(calls[0]["error_message"])
 
@@ -167,7 +168,7 @@ def test_handle_message_marks_failed_for_non_json_message(monkeypatch):
         )
 
     assert calls[0]["transfer_id"] == "unknown"
-    assert calls[0]["status"] == "failed"
+    assert calls[0]["status"] == "FAILED"
 
 
 def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
@@ -221,7 +222,7 @@ def test_handle_message_accepts_string_numbers_and_optional_nulls(monkeypatch):
     assert result["adapter_response"]["status_code"] == "ACSP"
     assert post_calls == [("crossborder", {"payload": payload, "correlation_id": "PTX-0000002"})]
     assert calls[0][1]["transfer_id"] == "PTX-0000002"
-    assert calls[0][1]["status"] == "processed"
+    assert calls[0][1]["status"] == "PROCESSED"
 
 
 def test_handle_message_marks_failed_for_unsupported_queue(monkeypatch):
@@ -251,7 +252,7 @@ def test_handle_message_marks_failed_for_unsupported_queue(monkeypatch):
         )
 
     assert calls[0]["transfer_id"] == "tx-124"
-    assert calls[0]["status"] == "failed"
+    assert calls[0]["status"] == "FAILED"
     assert calls[0]["request_queue"] == "CSV.PAYMENTS.UNKNOWN.REQ"
 
 
@@ -313,7 +314,7 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
         )
 
     assert calls[0]["transfer_id"] == "tx-125"
-    assert calls[0]["status"] == "failed"
+    assert calls[0]["status"] == "FAILED"
     assert calls[0]["request_queue"] == "CSV.PAYMENTS.DOMESTIC.REQ"
     assert calls[0]["error_message"] == "RJCT:Adapter validation failed"
     assert len(published_events) == 1
@@ -321,7 +322,7 @@ def test_handle_message_marks_failed_when_domestic_posting_returns_false(monkeyp
     assert published_events[0]["exchange_name"] == "paytrace.events"
     assert published_events[0]["routing_key"] == "payment.row.processed"
     assert event["event_code"] == "EV003"
-    assert event["payload"]["processing_status"] == "failed"
+    assert event["payload"]["processing_status"] == "FAILED"
     assert event["payload"]["error_message"] == "RJCT:Adapter validation failed"
     assert event["payload"]["message_payload"]["transfer_id"] == "tx-125"
     assert event["payload"]["adapter_response"]["status_code"] == "RJCT"
@@ -378,7 +379,7 @@ def test_handle_message_emits_failed_event_when_adapter_raises(monkeypatch):
         )
 
     assert calls[0]["transfer_id"] == "PTX-0000001"
-    assert calls[0]["status"] == "failed"
+    assert calls[0]["status"] == "FAILED"
     assert len(published_events) == 1
     event = published_events[0]["message"]
     assert published_events[0]["exchange_name"] == "paytrace.events"
@@ -388,7 +389,7 @@ def test_handle_message_emits_failed_event_when_adapter_raises(monkeypatch):
     assert event["source"] == "paytrace-payment-processor"
     assert event["correlation_id"] == "PTX-0000001"
     assert event["causation_id"] == "PTX-0000001"
-    assert event["payload"]["processing_status"] == "failed"
+    assert event["payload"]["processing_status"] == "FAILED"
     assert event["payload"]["message_payload"]["transfer_id"] == "PTX-0000001"
     assert event["payload"]["adapter_response"] == {}
     assert "Unable to reach ISO20022 adapter endpoint" in event["payload"]["error_message"]
