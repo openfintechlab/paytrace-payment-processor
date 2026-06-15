@@ -4,9 +4,11 @@
 
 `paytrace-payment-processor` is a long-running worker that consumes payment request messages from RabbitMQ, validates them against the PayTrace payment instruction schema, converts each request to ISO 20022 `pain.001.001.03`, posts it to the ISO 20022 adapter, records row processing status in PostgreSQL, and publishes a downstream processing event.
 
+In the PayTrace architecture, this service is the bridge between file ingestion and ISO 20022 execution. It turns validated CSV row messages into downstream payment instructions, captures the adapter outcome for each transfer, and emits EV003 so the orchestrator can determine when an input file has reached a terminal response state.
+
 The current processor is not a FastAPI service and does not expose HTTP routes or health endpoints. It runs from `src/main.py` and keeps a RabbitMQ listener alive in the foreground process.
 
-## Responsibilities
+The implementation includes:
 
 - Load `OFTL_*` configuration from `.env` and process environment.
 - Validate PostgreSQL connectivity at startup.
@@ -48,17 +50,23 @@ tests/
 
 ## Quick Start
 
+### 1. Create local environment file
+
 Create and update the local environment file:
 
 ```bash
 cp .env.example .env
 ```
 
+### 2. Install dependencies
+
 Install dependencies:
 
 ```bash
 uv sync
 ```
+
+### 3. Run the payment processor
 
 Run the processor:
 
@@ -76,6 +84,29 @@ Build the image from this project root:
 docker build -t paytrace-payment-processor:latest .
 ```
 
+The Dockerfile uses build arguments for its base images. Defaults are safe for local builds:
+
+```text
+DOCKER_PYTHON_BUILDER_IMAGE=dhi.io/python:3-debian13-sfw-dev
+DOCKER_PYTHON_RUNTIME_IMAGE=dhi.io/python:3
+```
+
+Override them when needed:
+
+```bash
+docker build \
+  --build-arg DOCKER_PYTHON_BUILDER_IMAGE=dhi.io/python:3-debian13-sfw-dev \
+  --build-arg DOCKER_PYTHON_RUNTIME_IMAGE=dhi.io/python:3 \
+  -t paytrace-payment-processor:latest .
+```
+
+The GitHub Docker build workflow reads the same values from GitHub Actions variables named `DOCKER_PYTHON_BUILDER_IMAGE` and `DOCKER_PYTHON_RUNTIME_IMAGE`, falling back to the defaults above when the variables are not set. Published images use the Docker Hub repository `openfintechlab/paytrace-payment-processor`.
+
+Commit message controls:
+
+- `[build docker]` builds the image.
+- `[buildandpush docker]` builds and pushes the image.
+
 Run with an environment file:
 
 ```bash
@@ -86,6 +117,19 @@ docker run -d \
 ```
 
 When running against services on the host from Docker Desktop, set host values such as `OFTL_POSTGRESDB_HOST=host.docker.internal` and `OFTL_RABITMQ_HOST=host.docker.internal`.
+
+## Service Processing Flow
+
+1. `src/main.py` loads configuration and initializes logging.
+2. `DBHelper.initialize_connection()` opens a PostgreSQL engine and runs `SELECT 1`.
+3. `RabbitMQHelper.initialize_connection()` validates RabbitMQ settings and declares both request queues.
+4. `RabbitMQHelper.start_listener()` starts a background consumer thread.
+5. `PaymentRequestHandler.handle_message()` decodes each queue message as UTF-8 JSON.
+6. The handler removes null/empty optional values, coerces numeric fields to decimals, and validates against `payment_instruction.schema.json`.
+7. Domestic queue messages are sent through `Iso20022AdapterPoster.post_domestic()`.
+8. Cross-border queue messages are sent through `Iso20022AdapterPoster.post_crossborder()`.
+9. The adapter response is parsed. Accepted statuses are `ACTC`, `ACCP`, `ACFC`, `ACSP`, `ACSC`, `ACWC`, and `RCVD`.
+10. The worker publishes EV003 and then updates `oftl_fwcsv_row_dispatch` to `PROCESSED` or `FAILED`.
 
 ## Configuration Reference
 
@@ -182,19 +226,6 @@ Optional:
 
 The HTTP request always includes `Accept: application/xml`.
 
-## Runtime Flow
-
-1. `src/main.py` loads configuration and initializes logging.
-2. `DBHelper.initialize_connection()` opens a PostgreSQL engine and runs `SELECT 1`.
-3. `RabbitMQHelper.initialize_connection()` validates RabbitMQ settings and declares both request queues.
-4. `RabbitMQHelper.start_listener()` starts a background consumer thread.
-5. `PaymentRequestHandler.handle_message()` decodes each queue message as UTF-8 JSON.
-6. The handler removes null/empty optional values, coerces numeric fields to decimals, and validates against `payment_instruction.schema.json`.
-7. Domestic queue messages are sent through `Iso20022AdapterPoster.post_domestic()`.
-8. Cross-border queue messages are sent through `Iso20022AdapterPoster.post_crossborder()`.
-9. The adapter response is parsed. Accepted statuses are `ACTC`, `ACCP`, `ACFC`, `ACSP`, `ACSC`, `ACWC`, and `RCVD`.
-10. The worker publishes EV003 and then updates `oftl_fwcsv_row_dispatch` to `PROCESSED` or `FAILED`.
-
 ## Source Messages and Events
 
 The source for this processor is `paytrace-file-ingest-csv`. That worker publishes one JSON payment request per valid CSV row to one of the request queues:
@@ -204,7 +235,8 @@ The source for this processor is `paytrace-file-ingest-csv`. That worker publish
 
 The file-ingest source also publishes its own lifecycle events to `OFTL_RABITMQ_PUBEVENT_EXCHANGE`:
 
-- EV003 `payment.row.processed` when a CSV row is processed and published to RabbitMQ, with `payload.processing_status=PROCESSED` or `FAILED`.
+- EV001 `files.csv.loaded` when a CSV file is fully processed and archived.
+- EV002 `files.csv.row.failed` when an individual CSV row fails before downstream payment processing.
 
 > Please refer to [Paytrace Business Events](https://github.com/openfintechlab/pytrace-backlogs/wiki/Business-Events) for the EV003 schema.
 
@@ -377,7 +409,7 @@ EV003 headers:
 }
 ```
 
-## Database Side Effects
+## Database Objects
 
 The processor writes to `oftl_fwcsv_row_dispatch` using an upsert keyed by `transfer_id`.
 
@@ -414,7 +446,7 @@ uv run pytest tests/test_iso20022_adapter_poster.py -v
 uv run pytest tests/test_rabbitmq_helper.py -v
 ```
 
-## Major Libraries
+## Major Libraries Used
 
 - `python-dotenv` and `environs` for environment loading
 - `sqlalchemy` and `psycopg2-binary` for PostgreSQL access
