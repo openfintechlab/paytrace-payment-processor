@@ -2,67 +2,71 @@
 """
 Copyright 2026-2028 openfintechlab.com, Inc. All rights reserved.
 Licenses: LICENSE.md
-Description: Service Template / starter code for PayTrace SCA Service build on fastapi.
-Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/12
+Description: Service Template / starter code for PayTrace SCA Service.
+Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/14
 """
 
-from fastapi                import FastAPI
-from routes.Routes          import Routes
-from utilities.Logging      import Logging
-from utilities.ConfigLoader import ConfigLoader 
-from utilities.DBHelper     import DBHelper
-from utilities.HeaderValidationMiddleware import HeaderValidationMiddleware
-from contextlib             import asynccontextmanager
-from uvicorn.config         import LOGGING_CONFIG
-
-
-import uvicorn
 import sys
+import time
+
+try:
+    from domain.PaymentRequestHandler import PaymentRequestHandler
+    from utilities.ConfigLoader import ConfigLoader
+    from utilities.DBHelper import DBHelper
+    from utilities.Logging import Logging
+    from utilities.RabbitMQHelper import RabbitMQConnectionError, RabbitMQHelper
+except ModuleNotFoundError:  # pragma: no cover - package execution path
+    from src.domain.PaymentRequestHandler import PaymentRequestHandler
+    from src.utilities.ConfigLoader import ConfigLoader
+    from src.utilities.DBHelper import DBHelper
+    from src.utilities.Logging import Logging
+    from src.utilities.RabbitMQHelper import RabbitMQConnectionError, RabbitMQHelper
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    try:        
-        result = DBHelper.initialize_connection()        
+
+def initialize_service():
+    try:
+        result = DBHelper.initialize_connection()
         if not result:
             Logging.info("Database connection is not established.")
             Logging.error("Failed to initialize database connection during startup.")
             raise RuntimeError("Database initialization failed. Service startup aborted.")
+        RabbitMQHelper.initialize_connection(PaymentRequestHandler.handle_message)
+        RabbitMQHelper.start_listener()
     except Exception as ex:
-        Logging.info("Database connection is not established.")
-        Logging.error(f"Database startup error: {ex}")
+        Logging.info("Service dependencies are not fully established.")
+        Logging.error(f"Service startup error: {ex}")
         raise
-    yield
-    DBHelper.dispose_connection()
-
-
-app         = FastAPI(lifespan=lifespan)
-routes      = Routes()
-app.add_middleware(HeaderValidationMiddleware)
-
-# Initializing the FastAPI app and loading routes from the Routes class.
-app.include_router(routes.router)
-app.include_router(routes.public_router)
-# END;
 
 # Default variables
-_DEFAULT_LOG_FORMAT = "[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
 _DEFAULT_LOG_LEVEL  = "INFO"
-_DEFAULT_HOST       = "0.0.0.0"
-_DEFAULT_PORT       = 8081
 # END;
 
 
 def displayBanner():
+    banner = r"""
+        ____                   _____       __            __    __          __  
+        / __ \____  ___  ____  / __(_)___  / /____  _____/ /_  / /   ____ _/ /_ 
+        / / / / __ \/ _ \/ __ \/ /_/ / __ \/ __/ _ \/ ___/ __ \/ /   / __ `/ __ \
+        / /_/ / /_/ /  __/ / / / __/ / / / / /_/  __/ /__/ / / / /___/ /_/ / /_/ /
+        \____/ .___/\___/_/ /_/_/ /_/_/ /_/\__/\___/\___/_/ /_/_____/\__,_/_.___/ 
+            /_/                                                                   
+            """
+    print(banner)
     Logging.info("===============================================")
-    Logging.info("Starting PayTrace SCA Service")
+    Logging.info("Starting PayTrace Payment Processor")
     Logging.info(f"Version: {ConfigLoader.get('OFTL_SCA_VERSION', 'N/A')}")
-    Logging.info(f"Context Root: {ConfigLoader.get('OFTL_SCA_CONTEXT_ROOT', 'N/A')}")
-    Logging.info(f"Host: {ConfigLoader.get('OFTL_SCA_HOST', _DEFAULT_HOST)}")
-    Logging.info(f"Port: {ConfigLoader.get('OFTL_SCA_PORT', _DEFAULT_PORT)}")
+    Logging.info(f"Database: {ConfigLoader.get('OFTL_POSTGRESDB_NAME', 'N/A')}")
+    Logging.info(f"Database Host: {ConfigLoader.get('OFTL_POSTGRESDB_HOST', 'N/A')}")
+    Logging.info(
+        f"RabbitMQ Domestic Queue: "
+        f"{ConfigLoader.get('OFTL_RABITMQ_DOEMSTIC_REQUEST_QUEUE', 'CSV.PAYMENTS.DOMESTIC.REQ')}"
+    )
+    Logging.info(
+        f"RabbitMQ Cross Border Queue: "
+        f"{ConfigLoader.get('OFTL_RABITMQ_CROSS_BORDER_REQUEST_QUEUE', 'CSV.PAYMENTS.CROSS_BORDER.REQ')}"
+    )
     Logging.info(f"Log Level: {ConfigLoader.get('OFTL_LOG_LEVEL', _DEFAULT_LOG_LEVEL)}")
-    Logging.info(f"Database: {ConfigLoader.get('OFTL_POSTGRESDB_NAME', "N/A")}")
-    Logging.info(f"Database Host: {ConfigLoader.get('OFTL_POSTGRESDB_HOST', "N/A")}")
     Logging.info("===============================================")
 
     pass
@@ -71,19 +75,24 @@ def displayBanner():
 if __name__ == "__main__":
     try:
         displayBanner()
-        # Setting log cofig and format
-        
-        log_config = LOGGING_CONFIG
-        log_config["formatters"]["default"]["fmt"] = ConfigLoader.get("OFTL_LOG_FORMAT", _DEFAULT_LOG_FORMAT)
-        log_config["handlers"]["default"]["level"] = ConfigLoader.get("OFTL_LOG_LEVEL", _DEFAULT_LOG_LEVEL)
-        # END;
-        uvicorn.run(app, 
-                    host=ConfigLoader.get("OFTL_SCA_HOST", _DEFAULT_HOST),
-                    port=int(ConfigLoader.get("OFTL_SCA_PORT", _DEFAULT_PORT)),
-                    log_config=log_config,
-                )
-        
-    except Exception as e:
-        Logging.error(f"Error starting SCA Service")  
+        initialize_service()
+        Logging.info("PayTrace Payment Processor started successfully.")        
+        while True:
+            time.sleep(60)  # Keep alive, replace with actual logic
+    except KeyboardInterrupt:
+        Logging.warning("Shutdown requested by user.")
+        DBHelper.dispose_connection()
+        RabbitMQHelper.stop_listener()        
+        sys.exit(0)
+    except RabbitMQConnectionError as e:
+        Logging.error("Error starting Payment Processor")
         Logging.error(str(e))
+        RabbitMQHelper.stop_listener()
+        sys.exit(99)
+    except Exception as e:
+        Logging.error("Error starting Payment Processor")
+        Logging.error(str(e))
+        RabbitMQHelper.stop_listener()
         sys.exit(91)
+    finally:
+        RabbitMQHelper.stop_listener()

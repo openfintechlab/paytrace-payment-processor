@@ -8,8 +8,10 @@ Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/12
 
 import os
 import re
+from pathlib import Path
 from typing import Any, ClassVar
 
+from dotenv import dotenv_values
 from environs import Env
 
 
@@ -18,6 +20,7 @@ class ConfigLoader:
 
     _KEY_PATTERN = re.compile(r"^OFTL_[A-Z0-9]+_[A-Z0-9_]+(?:_SECRET)?$")
     _env = Env()
+    _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
     configurations: ClassVar[dict[str, str]] = {}
 
     @classmethod
@@ -35,10 +38,15 @@ class ConfigLoader:
     @classmethod
     def load_configurations(cls) -> dict[str, str]:
         """Load validated OFTL variables from process env and .env into a dictionary."""
-        cls._env.read_env()  # Loads .env values (if present) into os.environ.
         loaded: dict[str, str] = {}
+        env_values = {
+            key: value
+            for key, value in dotenv_values(cls._ENV_FILE).items()
+            if value is not None
+        }
+        merged_values = env_values | os.environ
 
-        for key, value in os.environ.items():
+        for key, value in merged_values.items():
             if not key.startswith("OFTL_"):
                 continue
             if not cls._is_valid_key(key):
