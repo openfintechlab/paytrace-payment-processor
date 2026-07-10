@@ -15,10 +15,14 @@ from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
-from utilities.ConfigLoader import ConfigLoader
-from utilities.Logging import Logging
+try:
+    from .ConfigLoader import ConfigLoader
+    from .Logging import Logging
+except ImportError:  # pragma: no cover - package import fallback
+    from utilities.ConfigLoader import ConfigLoader
+    from utilities.Logging import Logging
 
 
 class DBHelper:
@@ -29,6 +33,7 @@ class DBHelper:
     _engine: ClassVar[Engine | None] = None
     _session_factory: ClassVar[sessionmaker | None] = None
     _DEFAULT_POOL_SIZE: ClassVar[int] = 10
+    _DEFAULT_DB_SCHEMA: ClassVar[str] = "default"
 
     def __new__(cls) -> "DBHelper":
         if cls._instance is None:
@@ -42,12 +47,17 @@ class DBHelper:
         return cls()
 
     @classmethod
-    def _build_connection_url(cls) -> str:
+    def _build_connection_url_and_schema(cls) -> tuple[str, str]:
         username    = ConfigLoader.get("OFTL_POSTGRESDB_USERNAME")
         password    = ConfigLoader.get("OFTL_POSTGRESDB_PASSWORD")
         host        = ConfigLoader.get("OFTL_POSTGRESDB_HOST")
         port_value  = ConfigLoader.get("OFTL_POSTGRESDB_PORT")
         db_name     = ConfigLoader.get("OFTL_POSTGRESDB_NAME")
+        db_schema   = ConfigLoader.get("OFTL_POSTGRESDB_SCHEMA", cls._DEFAULT_DB_SCHEMA)
+
+        db_schema = str(db_schema).strip() if db_schema is not None else ""
+        if not db_schema:
+            db_schema = cls._DEFAULT_DB_SCHEMA
 
         missing = [
             key
@@ -71,10 +81,11 @@ class DBHelper:
             raise ValueError("Invalid OFTL_POSTGRESDB_PORT; expected a numeric value.")
 
         encoded_password = quote_plus(str(password))
-        return (
+        connection_url = (
             f"postgresql+psycopg2://{username}:{encoded_password}@"
             f"{host}:{port}/{db_name}"
         )
+        return connection_url, db_schema
 
     @classmethod
     def initialize_connection(cls) -> bool:
@@ -87,7 +98,7 @@ class DBHelper:
                 return True
 
             try:
-                connection_url = cls._build_connection_url()
+                connection_url, db_schema = cls._build_connection_url_and_schema()
             except ValueError as exc:
                 Logging.warning(f"Database initialization skipped: {exc}")
                 return False
@@ -103,6 +114,7 @@ class DBHelper:
 
             cls._engine = create_engine(
                 connection_url,
+                connect_args={"options": f"-csearch_path={db_schema}"},
                 pool_size=pool_size,
                 max_overflow=0,
                 pool_pre_ping=True,
@@ -118,10 +130,10 @@ class DBHelper:
             try:
                 with cls._engine.connect() as connection:
                     connection.execute(text("SELECT 1"))
-                Logging.info("Database connection initialized successfully.")
+                Logging.info("Database connection initialized successfully for schema=%s.", db_schema)
                 return True
             except SQLAlchemyError as exc:
-                Logging.error(f"Database connectivity check failed: {exc}")
+                Logging.error("Database connectivity check failed for schema=%s: %s", db_schema, exc)
                 cls.dispose_connection()
                 return False
 
@@ -135,9 +147,14 @@ class DBHelper:
 
     @classmethod
     def _get_session(cls):
-        if cls._session_factory is None and not cls.initialize_connection():
-            raise RuntimeError("Database is not initialized. Check DB configuration.")
-        return cls._session_factory()
+        factory = cls._session_factory
+        if factory is None:
+            if not cls.initialize_connection():
+                raise RuntimeError("Database is not initialized. Check DB configuration.")
+            factory = cls._session_factory
+            if factory is None:
+                raise RuntimeError("Database session factory is unavailable.")
+        return factory()
 
     @classmethod
     def execute_select(
